@@ -189,7 +189,7 @@ object Contexts {
      *  Typically used for attributes that are read and written only in special situations.
      */
     private var _moreProperties: Map[Key[Any], Any] = _
-    protected def moreProperties_=(moreProperties: Map[Key[Any], Any]): Unit = _moreProperties = moreProperties
+    def moreProperties_=(moreProperties: Map[Key[Any], Any]): Unit = _moreProperties = moreProperties
     final def moreProperties: Map[Key[Any], Any] = _moreProperties
 
     def property[T](key: Key[T]): Option[T] =
