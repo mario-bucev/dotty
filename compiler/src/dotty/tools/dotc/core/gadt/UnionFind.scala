@@ -23,15 +23,17 @@ object UnionFind:
       sizes += 1
       newElem
 
-    def union(lhs: ECH, rhs: ECH): Unit =
+    def union(lhs: ECH, rhs: ECH): ECH =
       val lhs1 = find(lhs)
       val rhs1 = find(rhs)
       if sizes(lhs1) < sizes(rhs1) then
         elems(lhs1) = rhs1
         sizes(rhs1) += sizes(lhs1)
+        rhs1
       else
         elems(rhs1) = lhs1
         sizes(lhs1) += sizes(rhs1)
+        lhs1
 
     def find(i: ECH): ECH =
       var p = elems(i)
