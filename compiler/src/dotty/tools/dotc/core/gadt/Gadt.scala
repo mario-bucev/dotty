@@ -20,6 +20,10 @@ object Gadt:
     val k = new Knowledge
     ctx.moreProperties = ctx.moreProperties + (KnowledgeKey -> k)
 
+    val got = k.simplifyLoop(pat, scrut)
+    println("GOT: "+got)
+
+    /*
     (pat, scrut) match
       case (AppliedType(tyconPat: TypeRef, paramPat), AppliedType(tyconScrut: TypeRef, paramScrut)) if tyconPat.symbol.isClass && tyconScrut.symbol.isClass =>
         val clsSymPat = tyconPat.symbol.asClass
@@ -33,7 +37,7 @@ object Gadt:
         println("Got " + got.map(_.show))
 
       case _ => ()
-
+    */
     return true
 
     pat match {

@@ -22,8 +22,7 @@ object Utils:
       if hk.declaredVariances == Nil then
         List.fill(hk.paramNames.size)(Variances.varianceFromInt(1))
       else hk.declaredVariances
-    val hkParamRefs = (0 until hk.paramNames.size).map(hk.paramRefs)
-    hkVariance.zip(hkParamRefs.zip(hk.paramInfos)).map { case (a, (b, c)) => (a, b, c) }
+    hkVariance.zip(hk.paramRefs.zip(hk.paramInfos)).map { case (a, (b, c)) => (a, b, c) }
 
   def toDNF(t: Type)(using Context): DNF =
     t match
@@ -38,8 +37,12 @@ object Utils:
       case t =>
         DNF(Set(Set(t)))
 
+  def commonTypes(dnf: DNF): Set[Type] =
+    dnf.disjunctions.reduce(_.intersect(_))
+
   def unordPairs[A](s: Set[A]): Set[(A, A)] =
-    s.flatMap(a => s.flatMap(b => if a == b then None else Some((a, b))))
+    s.map(a => s.flatMap(b => if a == b then Set.empty else Set(a, b)))
+      .map(pair => (pair.head, pair.last))
 
   def closeOver(t: Type, bounds: BoundsInfo)(using Context): Type =
     val newParams = HKTypeLambda.syntheticParamNames(bounds.length)
@@ -142,26 +145,9 @@ object Utils:
 
     (createNewHK(l, boundsInfoL), createNewHK(r, boundsInfoR))
 
-
-  /*
-  // TODO: Copy/paste of closeOver
-  def alphaRename(hk: HKTypeLambda)(using Context): (HKTypeLambda, TypeMap) =
-    val boundsInfo = boundsInfoOf(hk)
-
-    val map = (newHK: HKTypeLambda) => new TypeMap {
-      override def apply(tp: Type): Type = tp match
-        case tp: TypeParamRef =>
-          boundsInfo.indexWhere((_, candidate, _) => candidate == tp) match
-            case i if i >= 0 => newHK.paramRefs(i)
-            case _ => mapOver(tp)
-        case t => mapOver(t)
-    }
-
-    val newHK = HKTypeLambda(HKTypeLambda.syntheticParamNames(boundsInfo.size), boundsInfo.map(_._1))(
-      newHK => boundsInfo.map { case (_, _, TypeBounds(lo, hi)) => TypeBounds(map(newHK)(lo), map(newHK)(hi)) },
-      newHK => map(newHK)(hk.resType))
-    (newHK, map(newHK))
-  */
+  def orderedSubst(hkParams: List[TypeParamRef], subst: Map[TypeParamRef, Type])(using Context): List[Type] =
+    val substExt: Map[TypeParamRef, Type] = subst ++ (hkParams.toSet -- subst.keySet).map(x => x -> topOfKind(x))
+    substExt.toList.sortBy((tyParam, _) => hkParams.indexOf(tyParam)).map(_._2)
 
   // TODO: ...
   def ftv(t: Type)(using Context): Set[TypeParamRef] =
@@ -170,8 +156,7 @@ object Utils:
       case AppliedType(tycon, args) =>
         ftv(tycon) ++ args.flatMap(ftv)
       case hk: HKTypeLambda =>
-        val hkParamRefs = (0 until hk.paramNames.size).map(hk.paramRefs).toSet
-        (hk.paramInfos.flatMap(ftv).toSet ++ ftv(hk.resType)) -- hkParamRefs
+        (hk.paramInfos.flatMap(ftv).toSet ++ ftv(hk.resType)) -- hk.paramRefs.toSet
       case t: AndOrType =>
         ftv(t.tp1) ++ ftv(t.tp2)
       case t: TypeProxy =>
