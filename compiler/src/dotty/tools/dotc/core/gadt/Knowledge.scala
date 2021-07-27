@@ -3,7 +3,6 @@ package dotc
 package core
 package gadt
 
-import ExtraTypes._
 import Variances._
 import UnionFind._
 import Types._
@@ -41,6 +40,15 @@ class Knowledge:
   def weaklyDetsOf(a: ECH)(using Context): Set[Type] =
     members(a).toSet.map(storedTypes).filter(isWeaklyDet)
 
+  // TODO: Il y a mieux...
+  def ecOfTVar(tvar: TypeVar): Option[ECH] =
+    typeVarReprs.find { (ech, th) =>
+      storedTypes(th) match
+        case cand: TypeVar => cand == tvar
+        case AppliedType(cand: TypeVar, _) => cand == tvar
+        case _ => false
+    }.map(_._1)
+
   /*
   TODO: Certains points à résoundre:
     - Voir la différence entre GadtCstr et OrdCstrts dans isSubtype
@@ -58,7 +66,7 @@ class Knowledge:
     val origCstrts = createConstraints(pat, scrut) match
       case Some(cstrts) => cstrts
       case None => return false
-    println("CONSTRATS ARE "+origCstrts.map((s, t) => i"$s <: $t").mkString(", "))
+    println("CONSTRAINTS ARE "+origCstrts.map((s, t) => i"$s <: $t").mkString(", "))
     val cstrts = mutable.Stack.from(origCstrts)
     while cstrts.nonEmpty do
       val (s, t) = cstrts.pop()
@@ -102,7 +110,7 @@ class Knowledge:
         return Some(Set((pat, scrut)))
       case _ => ()
 
-    val intersectDNF = toDNF(AndType.make(pat, scrut, true))
+    val intersectDNF = disjunctions(AndType.make(pat, scrut, true))
     val inCommon = commonTypes(intersectDNF)
     val pairs = inCommon.flatMap(a => inCommon.flatMap(b => if a == b then None else Some((a, b))))
     pairs.foldLeft(Option(Set.empty[(Type, Type)])) {
@@ -146,17 +154,19 @@ class Knowledge:
 
   def compact(s: Type, t: Type)(using Context): Set[(Type, Type)] =
     println(i"COMPACT $s <: $t")
-    println(s)
-    println(t)
     println(debugString)
     println("--------")
-    val sECGot = TFindOrCreateEC(s, Nil, true, true)
-    println(i"EC FOR $s: $sECGot")
-    val sEC = sECGot.asInstanceOf[ECType].ec
+    val sGot = TFindOrCreateEC(s, Nil, true, true)
+    println(i"TFind FOR $s: $sGot")
+    val sTyVar = sGot.asInstanceOf[TypeVar]
+    val sEC = ecOfTVar(sTyVar).get
+    println(i"EC: $sEC")
 
-    val tECGot = TFindOrCreateEC(t, Nil, true, true)
-    println(i"EC FOR $t: $tECGot")
-    val tEC = tECGot.asInstanceOf[ECType].ec
+    val tGot = TFindOrCreateEC(t, Nil, true, true)
+    println(i"TFind FOR $t: $tGot")
+    val tTyVar = tGot.asInstanceOf[TypeVar]
+    val tEC = ecOfTVar(tTyVar).get
+    println(i"EC: $tEC")
 
     addIneq(sEC, tEC) match
       case Left(()) =>
@@ -346,7 +356,7 @@ class Knowledge:
 //        return (Set.empty, Set.empty, Set.empty)
       // TODO: Use GEC (TBD) instead of brute-forcing
       val allMembs = allMembers -- typeVarReprs.values.toSet
-      val dnfs = allMembs.filter(th => storedTypes(th).isInstanceOf[DNF])
+      val dnfs = allMembs.filter(th => storedTypes(th).isInstanceOf[AndOrType])
       (allMembs, dnfs, Set.empty)
 
     def gatherPotentiallyAffected: Map[TH, Set[Type]] =
@@ -380,13 +390,14 @@ class Knowledge:
       headSubst.foldLeft((Set.empty[(Type, Type)], Set.empty[(ECH, ECH)], Set.empty[ECH])){
         case ((accCstrts, accToMerge, accDets), h) =>
           storedTypes(h) match
-            case dnf: DNF =>
+            case dnf: AndOrType =>
               val s = applyHeadSubst(dnf, ec, detType)
               // TODO: Simplify dnf
               s match
-                case otherEc: ECType =>
-                  // TODO
-                  ???
+                // TODO: Missing case
+//                case otherEc: ECType =>
+//                  // TODO
+//                  ???
                 case s if isDet(s) =>
                   val (cstrts, toMerge, dets) = updateMemberDet(h, s)
                   (accCstrts ++ cstrts, accToMerge ++ toMerge, accDets ++ dets)
@@ -411,9 +422,10 @@ class Knowledge:
           // TODO: Simplify dnf
           val s = dnf
           s match
-            case otherEc: ECType =>
-              // TODO
-              ???
+            // TODO: Missing case
+//            case otherEc: ECType =>
+//              // TODO
+//              ???
             case s if isDet(s) =>
               val (cstrts, toMerge, dets) = updateMemberDet(h, s)
               (accCstrts ++ cstrts, accToMerge ++ toMerge, accDets ++ dets)
@@ -451,16 +463,16 @@ class Knowledge:
 
   def applyHeadSubst(target: Type, ec: ECH, to: Type)(using Context): Type =
     target match
-      case t: AndOrType => applyHeadSubst(toDNF(t), ec, to)
-      case ECType(otherEc) if unionFind.find(ec) == unionFind.find(otherEc) =>
+//      case t: AndOrType => applyHeadSubst(toDNF(t), ec, to)
+      case tyVar: TypeVar if ecOfTVar(tyVar) == Some(ec) =>
         to
-      case AppliedECType(otherEc, args) if unionFind.find(ec) == unionFind.find(otherEc) =>
+      case AppliedType(tyVar: TypeVar, args) if ecOfTVar(tyVar) == Some(ec) =>
         assert(to.isInstanceOf[HKTypeLambda])
         val hk = to.asInstanceOf[HKTypeLambda]
         assert(hk.paramRefs.corresponds(args)((l, r) => l.hasSameKindAs(r)))
         hk.appliedTo(args)
-      case DNF(disjunctions) =>
-        toDNF(disjunctions.map(conjs => conjs.map(applyHeadSubst(_, ec, to)).reduce(AndType.make(_, _, true)))
+      case t: AndOrType =>
+        toDNF(disjunctions(t).map(conjs => conjs.map(applyHeadSubst(_, ec, to)).reduce(AndType.make(_, _, true)))
           .reduce(OrType.make(_, _, false))) // TODO: Soft = ???
 //        val disjsSubst = mutable.Set.empty[Set[Type]]
 //        for (disjs <- disjunctions) {
@@ -583,6 +595,8 @@ class Knowledge:
           Some(Set.empty)
         else if clsL.classDenot.derivesFrom(clsR) then
           val leftUpcasted = upcastTo(clsL, Nil, clsR)
+          // TODO: reduce ~> foldLeft
+          // TODO: or should we "never" encounter empty leftUpcasted ?
           deductionIneq(leftUpcasted.reduce(AndType.make(_, _, true)), t)
         else
           None
@@ -710,11 +724,11 @@ class Knowledge:
             ???
 
       case t: AndOrType =>
-        val dnf = toDNF(t)
+        val dnfDisjs = disjunctions(t)
         val disjsRec = mutable.Set.empty[Set[Type]]
-        for (disjs <- dnf.disjunctions) {
+        for (disj <- dnfDisjs) {
           val conjsRec = mutable.Set.empty[Type]
-          for (conj <- disjs) {
+          for (conj <- disj) {
             conj match
               case AppliedType(tycon: TypeRef, args) if tycon.symbol.isClass =>
                 val argsRec = args.map(a => TFindOrCreateEC(a, bounds, false, create))
@@ -725,7 +739,7 @@ class Knowledge:
           disjsRec += conjsRec.toSet
         }
         // TODO: Must simplify first
-        val dnfRec = DNF(disjsRec.toSet)
+        val dnfRec = disjunctionsToType(disjsRec.toSet)
         val isDNF = !(disjsRec.size == 1 && disjsRec.head.size == 1)
         if isDNF && inHead && !bounds.isEmpty then // TODO: !bounds.isEmpty -> no termref appearing in dnf
           dnfRec
@@ -794,13 +808,14 @@ class Knowledge:
         throw TryMatchFail()
 
     (t, s) match
-      case (t: AndOrType, s) =>
-        TECTryMatchImpl(xs, toDNF(t), s)
-      case (t, s: AndOrType) =>
-        TECTryMatchImpl(xs, t, toDNF(s))
+//      case (t: AndOrType, s) =>
+//        TECTryMatchImpl(xs, toDNF(t), s)
+//      case (t, s: AndOrType) =>
+//        TECTryMatchImpl(xs, t, toDNF(s))
       case (t: TypeParamRef, s) if xs.contains(t) => Map(t -> s)
-      case (t: AppliedECType, s: AppliedECType) if unionFind.find(t.ec) == unionFind.find(s.ec) =>
-        TECTryMatchVec(xs, t.args, s.args)
+      case (AppliedType(tyvar1: TypeVar, args1), AppliedType(tyvar2: TypeVar, args2))
+      if ecOfTVar(tyvar1) == ecOfTVar(tyvar2) || tyvar1 == tyvar2 =>
+        TECTryMatchVec(xs, args1, args2)
       // TODO: tycon comp. a bit too restrictive ?
       case (AppliedType(tycon1, args1), AppliedType(tycon2, args2)) if tycon1 == tycon2 =>
         TECTryMatchVec(xs, args1, args2)
@@ -826,9 +841,9 @@ class Knowledge:
           substXs
         else
           throw TryMatchFail()
-      case (t: DNF, s: DNF) =>
-        val tDisjsSorted: Vector[Set[Type]] = t.disjunctions.toVector.sortBy(_.size)
-        val sDisjsSorted: Vector[Set[Type]] = s.disjunctions.toVector.sortBy(_.size)
+      case (t: AndOrType, s: AndOrType) =>
+        val tDisjsSorted: Vector[Set[Type]] = disjunctions(t).toVector.sortBy(_.size)
+        val sDisjsSorted: Vector[Set[Type]] = disjunctions(s).toVector.sortBy(_.size)
         if tDisjsSorted.map(_.size) != sDisjsSorted.map(_.size) then
           throw TryMatchFail()
         val disjsSameSize = tDisjsSorted.indices.groupBy(tDisjsSorted(_).size)
@@ -895,12 +910,8 @@ class Knowledge:
             val h = candidatesIt.next()
             storedTypes.get(h) match
               case Some(s) if s.hasSimpleKind => // && TECEquiv(...)
-//                println(i"$s")
-//                println(i"${storedTypes(h)}")
-//                println(i"${ecOf(h)}")
-//                println(debugString)
                 if TECEquiv(t, s) then
-                  return ECType(ecOf(h))
+                  return storedTypes(typeVarReprs(ecOf(h)))
               case _ => ()
           }
 
@@ -913,7 +924,6 @@ class Knowledge:
               throw ECNotFound()
 
       case hk: HKTypeLambda =>
-//        if ftv(t).intersect(bounds.map(_._2).toSet).isEmpty then
         if notAppearingIn(bounds.map(_._2).toSet, t) then
           val candidatesIt = allMembers.iterator
           while (candidatesIt.hasNext) {
@@ -922,7 +932,7 @@ class Knowledge:
               case Some(hkCand: HKTypeLambda) if hk.hasSameKindAs(hkCand)
                 && TECEquiv(hk.resType, hkCand.resType)
                 && BECEquiv(boundsInfoOf(hk), boundsInfoOf(hkCand)) =>
-                return ECType(ecOf.get(h).get)
+                return storedTypes(typeVarReprs(ecOf(h)))
               case _ => ()
           }
         if create then
@@ -956,7 +966,7 @@ class Knowledge:
         TypeComparer.isSubTypeWhenFrozen(typeMap(hi2), typeMap(hi1))
     }
 
-  // TODO: Marche assui avec refn on dirait ?
+  // TODO: Marche aussi avec refn on dirait ?
   def BEntailed(bnds: BoundsInfo)(using Context): Boolean =
     bnds.forall { case (_, _, TypeBounds(lo, hi)) => TypeComparer.isSubTypeWhenFrozen(lo, hi) }
 
@@ -982,6 +992,7 @@ class Knowledge:
 
   def TECCreate(t: Type, bounds: BoundsInfo)(using Context): Type =
     val newEC = unionFind.add()
+    /*
     println(i"CREATING AN EC FOR $t WITH EC [$newEC]")
     println(debugString)
     val (typeToStore, tyVarRepr, typeToReturn) = {
@@ -1027,11 +1038,13 @@ class Knowledge:
     println("EC CREATION")
     println(debugString)
     typeToReturn
+    */
+    ???
 
   def TECTryFindApplied(t: Type,
     bounds: BoundsInfo)(using Context): Option[Type] =
     t match
-      case _: (ECType | TypeRef) => None
+      case _: (TypeVar | TypeRef) => None
       case t =>
         val candidatesIt = allMembers.iterator
         while (candidatesIt.hasNext) {
@@ -1043,13 +1056,12 @@ class Knowledge:
                   val substExt = subst ++ (hk.paramRefs.toSet -- subst.keySet).map(x => x -> topOfKind(x))
                   if BECSatisfied(boundsInfoOf(hk), substExt) then
                     val substImgOrdered = orderedSubst(hk.paramRefs, substExt)
-                    val applied = AppliedECType(ecOf(h), substImgOrdered)
-//                    if ftv(t).intersect(bounds.map(_._2).toSet).isEmpty && ftv(applied).isEmpty then
+                    val ecTyVar = storedTypes(typeVarReprs(ecOf(h)))
+                    val applied = ecTyVar.appliedTo(substImgOrdered)
                     if notAppearingIn(bounds.map(_._2).toSet, t) && noTypeParams(applied) then
                       TECTryFindECOfApplied(applied) match
-                        case Some(ec) => return Some(ECType(ec))
+                        case Some(ec) => return Some(typeReprOf(ec))
                         case None => ()
-//                    if ftv(t).intersect(bounds.map(_._2).toSet).nonEmpty then
                     if notAppearingIn(bounds.map(_._2).toSet, t) then
                       return Some(applied)
                 case None => ()
@@ -1057,16 +1069,22 @@ class Knowledge:
         }
         None
 
+  // TODO
+  def TECTryFindECOfApplied(t: Type)(using Context): Option[ECH] =
+    ???
+  /*
   def TECTryFindECOfApplied(t: AppliedECType)(using Context): Option[ECH] =
     val candidatesIt = allMembers.iterator
     while (candidatesIt.hasNext) {
       val h = candidatesIt.next()
       storedTypes(h) match
+        // TODO: Incorrect! Il faut verifier les args aussi !!!
         case cand: AppliedECType if unionFind.find(t.ec) == unionFind.find(cand.ec) =>
           return Some(ecOf(h))
         case _ => ()
     }
     None
+  */
 
   def BECSatisfied(bounds: BoundsInfo, subst: Map[TypeParamRef, Type])(using Context): Boolean =
     assert(bounds.map(_._2).toSet == subst.keySet)
@@ -1105,43 +1123,6 @@ class Knowledge:
   def typeReprOf(ec: ECH): Type =
     dets.get(ec).map(storedTypes)
       .getOrElse(storedTypes(typeVarReprs(ec)))
-
-  def isDet(t: Type)(using Context): Boolean =
-    // TODO: On ne devrait pas avoir de AndOrType, n'est-ce pas ?
-    t match
-      case dnf: DNF if dnf.disjunctions.forall(_.forall(isDet)) =>
-        val disjs = dnf.disjunctions.map(conj => conj.reduce(AndType.make(_, _)))
-        def noSubDisjs = unordPairs(disjs).forall((disj1, disj2) =>
-          TypeComparer.isSubTypeWhenFrozen(disj1, disj2) &&
-          TypeComparer.isSubTypeWhenFrozen(disj2, disj1))
-        def noSubConjs = dnf.disjunctions.forall(conj =>
-          unordPairs(conj).forall((t1, t2) =>
-            TypeComparer.isSubTypeWhenFrozen(t1, t2) &&
-            TypeComparer.isSubTypeWhenFrozen(t2, t1)))
-        noSubDisjs && noSubConjs
-      // TODO: Et les gnd types ???
-      case AppliedType(tycon: TypeRef, _) if tycon.symbol.isClass =>
-        true
-      case t: TypeRef if t.symbol.isClass =>
-        true
-      case hk: HKTypeLambda =>
-        isDet(hk.resType)
-      case _ =>
-        false
-
-  def isWeaklyDet(t: Type)(using Context): Boolean =
-    // TODO: On ne devrait pas avoir de AndOrType, n'est-ce pas ?
-    t match
-      case dnf: DNF =>
-        dnf.disjunctions.forall(_.forall(isWeaklyDet))
-      case AppliedType(tycon: TypeRef, _) if tycon.symbol.isClass =>
-        true
-      case t: TypeRef if t.symbol.isClass =>
-        true
-      case hk: HKTypeLambda =>
-        isWeaklyDet(hk.resType)
-      case _ =>
-        false
 
 
 case class TryMatchFail() extends Exception

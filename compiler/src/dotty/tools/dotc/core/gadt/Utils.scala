@@ -24,21 +24,66 @@ object Utils:
       else hk.declaredVariances
     hkVariance.zip(hk.paramRefs.zip(hk.paramInfos)).map { case (a, (b, c)) => (a, b, c) }
 
-  def toDNF(t: Type)(using Context): DNF =
+  def toDNF(t: Type)(using Context): Type =
+    disjunctionsToType(disjunctions(t))
+
+  def disjunctionsToType(disjs: Set[Set[Type]])(using Context): Type =
+    assert(disjs.map(_.size).sum >= 1)
+    ???
+
+  def disjunctions(t: Type): Set[Set[Type]] =
     t match
       case AndType(lhs, rhs) =>
-        val lhsDNF = toDNF(lhs)
-        val rhsDNF = toDNF(rhs)
-        DNF(lhsDNF.disjunctions.flatMap(lConjs => rhsDNF.disjunctions.map(rConjs => lConjs ++ rConjs)))
+        val lhsDNF = disjunctions(lhs)
+        val rhsDNF = disjunctions(rhs)
+        lhsDNF.flatMap(lConjs => rhsDNF.map(rConjs => lConjs ++ rConjs))
       case OrType(lhs, rhs) =>
-        val lhsDNF = toDNF(lhs)
-        val rhsDNF = toDNF(rhs)
-        DNF(lhsDNF.disjunctions ++ rhsDNF.disjunctions)
+        val lhsDNF = disjunctions(lhs)
+        val rhsDNF = disjunctions(rhs)
+        lhsDNF ++ rhsDNF
       case t =>
-        DNF(Set(Set(t)))
+        Set(Set(t))
 
-  def commonTypes(dnf: DNF): Set[Type] =
-    dnf.disjunctions.reduce(_.intersect(_))
+  def commonTypes(disjs: Set[Set[Type]]): Set[Type] =
+    disjs.reduce(_.intersect(_))
+
+  def isDet(t: Type)(using Context): Boolean =
+    t match
+      case t: AndOrType =>
+        val disjsSet = disjunctions(t)
+        if !disjsSet.forall(_.forall(isDet)) then
+          return false
+        val disjs = disjsSet.map(conj => conj.reduce(AndType.make(_, _)))
+        def noSubDisjs = unordPairs(disjs).forall((disj1, disj2) =>
+          TypeComparer.isSubTypeWhenFrozen(disj1, disj2) &&
+            TypeComparer.isSubTypeWhenFrozen(disj2, disj1))
+        def noSubConjs = disjsSet.forall(conj =>
+          unordPairs(conj).forall((t1, t2) =>
+            TypeComparer.isSubTypeWhenFrozen(t1, t2) &&
+              TypeComparer.isSubTypeWhenFrozen(t2, t1)))
+        noSubDisjs && noSubConjs
+      // TODO: Et les gnd types ???
+      case AppliedType(tycon: TypeRef, _) if tycon.symbol.isClass =>
+        true
+      case t: TypeRef if t.symbol.isClass =>
+        true
+      case hk: HKTypeLambda =>
+        isDet(hk.resType)
+      case _ =>
+        false
+
+  def isWeaklyDet(t: Type)(using Context): Boolean =
+    t match
+      case t: AndOrType =>
+        disjunctions(t).forall(_.forall(isWeaklyDet))
+      case AppliedType(tycon: TypeRef, _) if tycon.symbol.isClass =>
+        true
+      case t: TypeRef if t.symbol.isClass =>
+        true
+      case hk: HKTypeLambda =>
+        isWeaklyDet(hk.resType)
+      case _ =>
+        false
 
   def unordPairs[A](s: Set[A]): Set[(A, A)] =
     if s.isEmpty || s.size == 1 then Set.empty
@@ -61,6 +106,7 @@ object Utils:
       hk => bounds.map { case (_, _, TypeBounds(lo, hi)) => TypeBounds(map(hk)(lo), map(hk)(hi)) },
       hk => map(hk)(t))
 
+  // TODO: What does a "Nil" implies?
   def upcastTo(child: ClassSymbol, args: List[Type], parentClsSym: ClassSymbol)(using Context): List[Type] =
     val parentTypeRef = parentClsSym.classDenot.typeRef
 

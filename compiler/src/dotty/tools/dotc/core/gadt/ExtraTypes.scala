@@ -10,7 +10,7 @@ import Contexts._
 import UnionFind.ECH
 
 object ExtraTypes {
-
+/*
   final class DNF(val disjunctions: Set[Set[Type]], val theType: Type) extends TypeProxy with TermType {
     def underlying(using Context): Type = theType
 
@@ -55,5 +55,5 @@ object ExtraTypes {
 
     override def computeHash(bs: Hashable.Binders): Int = ec.hash
   }
-
+*/
 }

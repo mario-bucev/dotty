@@ -74,11 +74,11 @@ trait PatternTypeConstrainer { self: TypeComparer =>
    *  in which case the subtyping relationship "heals" the type.
    */
   def constrainPatternType(pat: Type, scrut: Type, forceInvariantRefinement: Boolean = false): Boolean = trace(i"constrainPatternType($scrut, $pat)", gadts) {
-    println(i"$pat")
-    println(i"$scrut")
-    val res = gadt.Gadt(pat, scrut)
-    println("===============")
-    println("===============")
+//    println(i"$pat")
+//    println(i"$scrut")
+//    val res = gadt.Gadt(pat, scrut)
+//    println("===============")
+//    println("===============")
 
     def classesMayBeCompatible: Boolean = {
       import Flags._
