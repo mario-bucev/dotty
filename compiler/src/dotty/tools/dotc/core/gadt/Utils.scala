@@ -41,14 +41,17 @@ object Utils:
     dnf.disjunctions.reduce(_.intersect(_))
 
   def unordPairs[A](s: Set[A]): Set[(A, A)] =
-    s.map(a => s.flatMap(b => if a == b then Set.empty else Set(a, b)))
-      .map(pair => (pair.head, pair.last))
+    if s.isEmpty || s.size == 1 then Set.empty
+    else
+      s.map(a => s.flatMap(b => if a == b then Set.empty else Set(a, b)))
+        .map(pair => (pair.head, pair.last))
 
   def closeOver(t: Type, bounds: BoundsInfo)(using Context): Type =
     val newParams = HKTypeLambda.syntheticParamNames(bounds.length)
     val map = (hk: HKTypeLambda) => new TypeMap {
       override def apply(tp: Type): Type = tp match
         case tp: TypeParamRef =>
+          // TODO: Ok ?
           bounds.indexWhere((_, candidate, _) => candidate == tp) match
             case i if i >= 0 => hk.paramRefs(i)
             case _ => mapOver(tp)
@@ -112,6 +115,7 @@ object Utils:
     val hkBound = HKTypeLambda(HKTypeLambda.syntheticParamNames(bounds.length), bounds.map(_._1))(
       hk => bounds.map {
         case (_, tyParam, TypeBounds(lo, hi)) =>
+          // TODO: Ok?
           TypeBounds(lo.subst(tyParam.binder, hk), hi.subst(tyParam.binder, hk))
       },
       _ => defn.AnyType // TODO: Ok ?
@@ -149,6 +153,19 @@ object Utils:
     val substExt: Map[TypeParamRef, Type] = subst ++ (hkParams.toSet -- subst.keySet).map(x => x -> topOfKind(x))
     substExt.toList.sortBy((tyParam, _) => hkParams.indexOf(tyParam)).map(_._2)
 
+  def notAppearingIn(xs: Set[TypeParamRef], t: Type)(using Context): Boolean =
+    // ftv(t).intersect(xs).isEmpty
+    !t.existsPart {
+      case x: TypeParamRef => xs.contains(x)
+      case _ => false
+    }
+
+  def noTypeParams(t: Type)(using Context): Boolean =
+    t.forallParts {
+      case x: TypeParamRef => false
+      case _ => true
+    }
+  /*
   // TODO: ...
   def ftv(t: Type)(using Context): Set[TypeParamRef] =
     t match
@@ -165,4 +182,4 @@ object Utils:
       //        ftv(t.lo) ++ ftv(t.hi)
       // TODO: There are other cases to consider
       case _ => Set.empty
-
+  */

@@ -17,6 +17,10 @@ object ExtraTypes {
     override def hash: Int = theType.hash
 
     override def computeHash(bs: Hashable.Binders): Int = theType.computeHash(bs)
+
+    override def toString: String = s"DNF($theType)"
+
+    override def show(using Context): String = i"DNF($theType)"
   }
 
   object DNF {

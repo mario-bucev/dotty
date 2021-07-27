@@ -22,7 +22,8 @@ object Gadt:
 
     val got = k.simplifyLoop(pat, scrut)
     println("GOT: "+got)
-
+    println("KNOWLEDGE:")
+    println(k.debugString)
     /*
     (pat, scrut) match
       case (AppliedType(tyconPat: TypeRef, paramPat), AppliedType(tyconScrut: TypeRef, paramScrut)) if tyconPat.symbol.isClass && tyconScrut.symbol.isClass =>

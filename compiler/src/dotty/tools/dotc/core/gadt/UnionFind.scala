@@ -10,6 +10,7 @@ object UnionFind:
 
   extension (ech: ECH)
     def hash: Int = java.util.Objects.hash(ech)
+    def toInt: Int = ech
 
   // TODO: No better way to do so ??
 
@@ -18,6 +19,7 @@ object UnionFind:
     val sizes: mutable.ArrayBuffer[Int] = mutable.ArrayBuffer.empty
 
     def add(): ECH =
+      // TODO: Fresh id gen ok?
       val newElem = elems.size
       elems += newElem
       sizes += 1
