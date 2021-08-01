@@ -104,7 +104,10 @@ class GSub:
     None
 
   def debugString: String =
-    edges.foldLeft(Seq.empty[String]) {
-      case (acc, (ec, his)) =>
-        acc :+ s"""[$ec] <: {${his.map(hi => s"[$hi]").mkString(", ")}}"""
-    }.mkString("\n")
+    if edges.isEmpty then
+      "(empty gsub)"
+    else
+      edges.foldLeft(Seq.empty[String]) {
+        case (acc, (ec, his)) =>
+          acc :+ s"""[$ec] <: {${his.map(hi => s"[$hi]").mkString(", ")}}"""
+      }.mkString("\n")

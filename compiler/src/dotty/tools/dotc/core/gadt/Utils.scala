@@ -29,7 +29,10 @@ object Utils:
 
   def disjunctionsToType(disjs: Set[Set[Type]])(using Context): Type =
     assert(disjs.map(_.size).sum >= 1)
-    ???
+    // TODO: do not foldLeft with bot/top
+    disjs.foldLeft(defn.NothingType: Type)((acc, conjs) =>
+      // TODO: Soft = ???
+      OrType.make(conjs.foldLeft(defn.AnyType: Type)((acc2, ty) => AndType.make(ty, acc2)), acc, false))
 
   def disjunctions(t: Type): Set[Set[Type]] =
     t match
@@ -131,6 +134,8 @@ object Utils:
       else
         Nil
 
+    if child == parentClsSym then
+      return List(AppliedType(child.typeRef, args))
     assert(child.classDenot.derivesFrom(parentClsSym))
     val allParents = child.classDenot.classInfo.parents
     allParents.flatMap {
@@ -211,21 +216,28 @@ object Utils:
       case x: TypeParamRef => false
       case _ => true
     }
-  /*
-  // TODO: ...
-  def ftv(t: Type)(using Context): Set[TypeParamRef] =
-    t match
-      case t: TypeParamRef => Set(t)
-      case AppliedType(tycon, args) =>
-        ftv(tycon) ++ args.flatMap(ftv)
-      case hk: HKTypeLambda =>
-        (hk.paramInfos.flatMap(ftv).toSet ++ ftv(hk.resType)) -- hk.paramRefs.toSet
-      case t: AndOrType =>
-        ftv(t.tp1) ++ ftv(t.tp2)
-      case t: TypeProxy =>
-        ftv(t.underlying)
-      //      case t: TypeBounds =>
-      //        ftv(t.lo) ++ ftv(t.hi)
-      // TODO: There are other cases to consider
-      case _ => Set.empty
-  */
+
+  def approxDisj(c1: Option[Set[(Type, Type)]], c2: Option[Set[(Type, Type)]])(using Context): Option[Set[(Type, Type)]] =
+    (c1, c2) match
+      case (Some(c1), Some(c2)) =>
+        val allTypesC1 = c1.flatMap((s, t) => Set(s, t))
+        val allTypesC2 = c2.flatMap((s, t) => Set(s, t))
+        // Map[Type, Set[Type]]
+        val lowerC1 = allTypesC1.map(t => t -> c1.filter((lo, s) => s == t).map(_._1)).toMap
+        val lowerC2 = allTypesC2.map(t => t -> c2.filter((lo, s) => s == t).map(_._1)).toMap
+        val upperC1 = allTypesC1.map(t => t -> c1.filter((s, hi) => s == t).map(_._2)).toMap
+        val upperC2 = allTypesC2.map(t => t -> c2.filter((s, hi) => s == t).map(_._2)).toMap
+        Some((allTypesC1 ++ allTypesC2).foldLeft(Set.empty[(Type, Type)]) {
+          case (acc, t) =>
+            // TODO: Soft = ???
+            val combinedLo: Option[(Type, Type)] = lowerC1.get(t).zip(lowerC2.get(t))
+              .map((ls1, ls2) => (ls1 ++ ls2).reduce(OrType.make(_, _, false)))
+              .map(lo => (lo, t))
+            val combinedHi: Option[(Type, Type)] = upperC1.get(t).zip(upperC2.get(t))
+              .map((hs1, hs2) => (hs1 ++ hs2).reduce(AndType.make(_, _, true)))
+              .map(hi => (t, hi))
+            acc ++ Set(combinedLo, combinedHi).flatten
+        })
+      case (Some(c1), None) => Some(c1)
+      case (None, Some(c2)) => Some(c2)
+      case (None, None) => None

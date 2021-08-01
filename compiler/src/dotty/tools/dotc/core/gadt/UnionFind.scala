@@ -18,6 +18,10 @@ object UnionFind:
     val elems: mutable.ArrayBuffer[Int] = mutable.ArrayBuffer.empty
     val sizes: mutable.ArrayBuffer[Int] = mutable.ArrayBuffer.empty
 
+    def membersOf(ec: ECH): Set[ECH] =
+      val repr = find(ec)
+      elems.foldLeft(Set(repr))((acc, cand) => if find(cand) == repr then acc + cand else acc)
+
     def add(): ECH =
       // TODO: Fresh id gen ok?
       val newElem = elems.size

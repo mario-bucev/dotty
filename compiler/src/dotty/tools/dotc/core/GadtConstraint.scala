@@ -64,6 +64,11 @@ final class ProperGadtConstraint private(
 ) extends GadtConstraint with ConstraintHandling {
   import dotty.tools.dotc.config.Printers.{gadts, gadtsConstr}
 
+  def setConstraint(c: Constraint): Unit =
+    constraint = c
+
+  def getConstraint: Constraint = myConstraint
+
   def this() = this(
     myConstraint = new OrderingConstraint(SimpleIdentityMap.empty, SimpleIdentityMap.empty, SimpleIdentityMap.empty),
     mapping = SimpleIdentityMap.empty,

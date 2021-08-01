@@ -7,11 +7,13 @@ import Decorators._
 import Symbols._
 import Types._
 import Flags._
+import Utils._
 import Contexts._
 import Variances._
 import dotty.tools.dotc.reporting.trace
 import config.Printers._
 import util.Property._
+import typer.ProtoTypes.newTypeVar
 
 object Gadt:
   val KnowledgeKey: Key[Knowledge] = new Key[Knowledge]
@@ -24,6 +26,9 @@ object Gadt:
     println("GOT: "+got)
     println("KNOWLEDGE:")
     println(k.debugString)
+    println(ctx.typerState.constraint.show)
+    println(ctx.gadt.show)
+
     /*
     (pat, scrut) match
       case (AppliedType(tyconPat: TypeRef, paramPat), AppliedType(tyconScrut: TypeRef, paramScrut)) if tyconPat.symbol.isClass && tyconScrut.symbol.isClass =>
@@ -35,6 +40,10 @@ object Gadt:
 //        println(s"Class parents pat: ${clsSymPat.classDenot.classInfo.parents}")
         val got = Utils.upcastTo(clsSymPat, paramPat, clsSymScrut)
 //        println(s"Got (tree): $got")
+        val tv = newTypeVarOfSameKind(paramScrut.head)
+        println(tv.hasSimpleKind)
+        println(tv.typeParams)
+        println(tv.EtaExpand(tv.typeParams))
         println("Got " + got.map(_.show))
 
       case _ => ()

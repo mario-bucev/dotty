@@ -77,8 +77,10 @@ trait PatternTypeConstrainer { self: TypeComparer =>
 //    println(i"$pat")
 //    println(i"$scrut")
 //    val res = gadt.Gadt(pat, scrut)
-//    println("===============")
-//    println("===============")
+//    println("====================================")
+//    println("====================================")
+//    println("====================================\n")
+//    return res
 
     def classesMayBeCompatible: Boolean = {
       import Flags._
@@ -277,6 +279,9 @@ trait PatternTypeConstrainer { self: TypeComparer =>
           if !result then
             constraint = saved
             ctx.gadt.restore(savedGadt)
+//          println(s"GADT ORIG RESULT ==> $result")
+//          println(constraint.show)
+//          println(ctx.gadt.show)
           result
         case _ =>
           // Give up if we don't get AppliedType, e.g. if we upcasted to Any.
