@@ -351,8 +351,8 @@ class OrderingConstraint(private val boundsMap: ParamBounds,
   private def order(current: This, param1: TypeParamRef, param2: TypeParamRef)(using Context): This =
     if (param1 == param2 || current.isLess(param1, param2)) this
     else {
-      assert(contains(param1), i"$param1")
-      assert(contains(param2), i"$param2")
+//      assert(contains(param1), i"$param1")
+//      assert(contains(param2), i"$param2")
       val newUpper = param2 :: exclusiveUpper(param2, param1)
       val newLower = param1 :: exclusiveLower(param1, param2)
       val current1 = newLower.foldLeft(current)(upperLens.map(this, _, _, newUpper ::: _))

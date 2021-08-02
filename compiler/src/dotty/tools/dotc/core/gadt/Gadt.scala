@@ -22,6 +22,10 @@ object Gadt:
     val k = new Knowledge
     ctx.moreProperties = ctx.moreProperties + (KnowledgeKey -> k)
 
+    println("Before starting, we have:")
+    println(ctx.typerState.constraint.show)
+    println(ctx.gadt.show)
+
     val got = k.simplifyLoop(pat, scrut)
     println("GOT: "+got)
     println("KNOWLEDGE:")

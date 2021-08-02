@@ -437,15 +437,12 @@ class Knowledge:
           val aa = unionFind.find(a)
           val bb = unionFind.find(b)
           if aa != bb then
-            val typesInA = members(aa).map(storedTypes)
-            val typesInB = members(bb).map(storedTypes)
+            val typesInA = members(aa).map(storedTypes).toSet
+            val typesInB = members(bb).map(storedTypes).toSet
             val tyVarA = typeVarReprs(aa)
             val tyVarB = typeVarReprs(bb)
             val (newCsrts, newToMerge) = merge(aa, bb)
 
-            // TODO: Yeah ok buddy...
-            // TODO: Add constraints MANUALLY: we have the same problem with simplification going the other way
-            // TODO: No, here we must do for equality
             registerEqEC(aa, bb, tyVarA, tyVarB)
             typesInA.foreach(tA => typesInB.foreach(tB => tryRegisterEqNamedType(tA, tB)))
 
@@ -456,8 +453,8 @@ class Knowledge:
       case Right(cstrts) =>
         println("==============\n")
         registerSubtypeEC(sEC, tEC)
-        val typesInS = members(sEC).map(storedTypes)
-        val typesInT = members(tEC).map(storedTypes)
+        val typesInS = members(sEC).map(storedTypes).toSet
+        val typesInT = members(tEC).map(storedTypes).toSet
         typesInS.foreach(tS => typesInT.foreach(tT => tryRegisterSubtypeNamedType(tS, tT)))
 
         cstrts
@@ -512,6 +509,10 @@ class Knowledge:
 
       gSub.merge(a, b, ab)
 
+      // TODO: should but registerEC & co here
+      // TODO: should but registerEC & co here
+      // TODO: should but registerEC & co here
+
       // TODO: Remove duplicate member using GEC (TBD) instead of brute-forcing
       val allMembs = allMembers
       // FIXME
@@ -556,6 +557,7 @@ class Knowledge:
           case Some(chain) =>
             return (Set.empty, chain.zip(chain.tail).toSet)
           case None =>
+            // TODO: Need to register smth w.r.t. GadtConstraint ???
             addIneq(a, b) match
               case Right(cstrts) => allCsrts ++= cstrts
               case Left(()) => assert(false)
@@ -563,8 +565,8 @@ class Knowledge:
 //    println(s"DET STATUS: ${(dets.contains(a), dets.contains(b))}")
 //    println(debugString)
 //    println(typeVarReprs)
-    // TODO
-    /*
+    // TODO: aussi pour mettre dans gadt cstrts?
+
     (dets.contains(a), dets.contains(b)) match
       case (true, true) =>
         allCsrts += storedTypes(dets(a)) -> storedTypes(dets(b))
@@ -588,7 +590,7 @@ class Knowledge:
           removeMember(dets(a))
       case (false, false) =>
         ()
-    */
+
     val (cstrts, toMerge) = helper
     allCsrts ++= cstrts
     allToMerge ++= toMerge
