@@ -1,9 +1,7 @@
 package dotty.tools
 package dotc
 package core
-package gadt
 
-import ExtraTypes._
 import Variances._
 import UnionFind._
 import Types._
@@ -13,7 +11,9 @@ import Contexts._
 import Symbols._
 import typer.ProtoTypes.newTypeVar
 
-object Utils:
+import scala.collection.mutable
+
+object GadtUtils:
 
   type BoundsInfo = List[(Variance, TypeParamRef, TypeBounds)]
 
@@ -57,13 +57,16 @@ object Utils:
         if !disjsSet.forall(_.forall(isDet)) then
           return false
         val disjs = disjsSet.map(conj => conj.reduce(AndType.make(_, _)))
+
         def noSubDisjs = unordPairs(disjs).forall((disj1, disj2) =>
           TypeComparer.isSubTypeWhenFrozen(disj1, disj2) &&
             TypeComparer.isSubTypeWhenFrozen(disj2, disj1))
+
         def noSubConjs = disjsSet.forall(conj =>
           unordPairs(conj).forall((t1, t2) =>
             TypeComparer.isSubTypeWhenFrozen(t1, t2) &&
               TypeComparer.isSubTypeWhenFrozen(t2, t1)))
+
         noSubDisjs && noSubConjs
       // TODO: Et les gnd types ???
       case AppliedType(tycon: TypeRef, _) if tycon.symbol.isClass =>
@@ -162,7 +165,7 @@ object Utils:
     assert(result.hasSameKindAs(targetKind))
     result
 
-  def newHKTypeVarWithBounds(bounds: Utils.BoundsInfo)(using Context): TypeVar =
+  def newHKTypeVarWithBounds(bounds: BoundsInfo)(using Context): TypeVar =
     val hkBound = HKTypeLambda(HKTypeLambda.syntheticParamNames(bounds.length), bounds.map(_._1))(
       hk => bounds.map {
         case (_, tyParam, TypeBounds(lo, hi)) =>
@@ -190,6 +193,7 @@ object Utils:
     // newNames outside, to be sure that they are the same for newHKL and newHKR
     val newNames = HKTypeLambda.syntheticParamNames(boundsInfoL.size)
     val variances = boundsInfoL.map(_._1)
+
     def createNewHK(oldHK: HKTypeLambda, boundsInfo: BoundsInfo): HKTypeLambda =
       HKTypeLambda(newNames, variances)(
         newHK => boundsInfo.map {
@@ -205,7 +209,7 @@ object Utils:
     substExt.toList.sortBy((tyParam, _) => hkParams.indexOf(tyParam)).map(_._2)
 
   def notAppearingIn(xs: Set[TypeParamRef], t: Type)(using Context): Boolean =
-    // ftv(t).intersect(xs).isEmpty
+  // ftv(t).intersect(xs).isEmpty
     !t.existsPart {
       case x: TypeParamRef => xs.contains(x)
       case _ => false
@@ -241,3 +245,8 @@ object Utils:
       case (Some(c1), None) => Some(c1)
       case (None, Some(c2)) => Some(c2)
       case (None, None) => None
+
+  def clonedBag[A, B](m: mutable.Map[A, mutable.Set[B]]): mutable.Map[A, mutable.Set[B]] =
+    val res = mutable.Map.empty[A, mutable.Set[B]]
+    m.foreach((a, bs) => res += a -> bs.clone)
+    res

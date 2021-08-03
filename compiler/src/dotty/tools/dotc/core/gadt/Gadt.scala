@@ -7,7 +7,7 @@ import Decorators._
 import Symbols._
 import Types._
 import Flags._
-import Utils._
+//import Utils._
 import Contexts._
 import Variances._
 import dotty.tools.dotc.reporting.trace
@@ -19,19 +19,19 @@ object Gadt:
   val KnowledgeKey: Key[Knowledge] = new Key[Knowledge]
 
   def apply(pat: Type, scrut: Type)(using ctx: Context): Boolean = {
-    val k = new Knowledge
-    ctx.moreProperties = ctx.moreProperties + (KnowledgeKey -> k)
-
-    println("Before starting, we have:")
-    println(ctx.typerState.constraint.show)
-    println(ctx.gadt.show)
-
-    val got = k.simplifyLoop(pat, scrut)
-    println("GOT: "+got)
-    println("KNOWLEDGE:")
-    println(k.debugString)
-    println(ctx.typerState.constraint.show)
-    println(ctx.gadt.show)
+//    val k = new Knowledge
+//    ctx.moreProperties = ctx.moreProperties + (KnowledgeKey -> k)
+//
+//    println("Before starting, we have:")
+//    println(ctx.typerState.constraint.show)
+//    println(ctx.gadt.show)
+//
+//    val got = k.simplifyLoop(pat, scrut)
+//    println("GOT: "+got)
+//    println("KNOWLEDGE:")
+//    println(k.debugString)
+//    println(ctx.typerState.constraint.show)
+//    println(ctx.gadt.show)
 
     /*
     (pat, scrut) match
@@ -53,7 +53,7 @@ object Gadt:
       case _ => ()
     */
     return true
-
+/*
     pat match {
       case AppliedType(tycon, param) =>
         println("Tycon: " + tycon)
@@ -117,6 +117,6 @@ object Gadt:
           List()),
         0))
     */
-
-    true
+*/
+//    true
   }

@@ -1,19 +1,180 @@
 package dotty.tools
 package dotc
 package core
-package gadt
 
-import Variances._
-import UnionFind._
-import Types._
-import Names._
-import Decorators._
-import Contexts._
-import Symbols._
-import Flags._
+import Decorators.*
+import Contexts.*
+import Types.*
+import Symbols.*
+import Variances.*
+import Names.*
+import Flags.*
 import typer.ProtoTypes.newTypeVar
-import Utils._
+import GadtUtils.*
+
 import scala.collection.mutable
+
+object UnionFind:
+  opaque type ECH = Int
+
+  extension (ech: ECH)
+    def hash: Int = java.util.Objects.hash(ech)
+    def toInt: Int = ech
+
+  // TODO: No better way to do so ??
+
+  class UnionFind private(
+    private val elems: mutable.ArrayBuffer[Int],
+    private val sizes: mutable.ArrayBuffer[Int],
+  ):
+    def this() = this(mutable.ArrayBuffer.empty, mutable.ArrayBuffer.empty)
+
+    def fresh: UnionFind =
+      new UnionFind(elems.clone, sizes.clone)
+
+    def membersOf(ec: ECH): Set[ECH] =
+      val repr = find(ec)
+      elems.foldLeft(Set(repr))((acc, cand) => if find(cand) == repr then acc + cand else acc)
+
+    def add(): ECH =
+      // TODO: Fresh id gen ok?
+      val newElem = elems.size
+      elems += newElem
+      sizes += 1
+      newElem
+
+    def union(lhs: ECH, rhs: ECH): ECH =
+      val lhs1 = find(lhs)
+      val rhs1 = find(rhs)
+      if sizes(lhs1) < sizes(rhs1) then
+        elems(lhs1) = rhs1
+        sizes(rhs1) += sizes(lhs1)
+        rhs1
+      else
+        elems(rhs1) = lhs1
+        sizes(lhs1) += sizes(rhs1)
+        lhs1
+
+    def find(i: ECH): ECH =
+      var p = elems(i)
+      while p != elems(p) do
+        elems(p) = elems(elems(p))
+        p = elems(p)
+      p
+
+import UnionFind.*
+
+class GSub private(
+  private val edges: mutable.Map[ECH, mutable.Set[ECH]],
+  private val revEdges: mutable.Map[ECH, mutable.Set[ECH]]):
+
+  def this() = this(mutable.Map.empty, mutable.Map.empty)
+
+  def fresh: GSub =
+    new GSub(clonedBag(edges), clonedBag(revEdges))
+
+  def strictLowerBounds(a: ECH): Set[ECH] =
+    dfs(a, revEdges) - a
+
+  def strictUpperBounds(a: ECH): Set[ECH] =
+    dfs(a, edges) - a
+
+  def addIneq(a: ECH, b: ECH): Unit =
+    //    println(s"WE ADD $a <: $b  CURRENTLY")
+    //    println(debugString)
+    assert(chain(b, a).isEmpty)
+    val es1 = edges.getOrElseUpdate(a, mutable.Set.empty)
+    es1 += b
+    val es2 = revEdges.getOrElseUpdate(b, mutable.Set.empty)
+    es2 += a
+  //    println(s"NOW HAVE")
+  //    println(debugString)
+
+  def removeIneq(a: ECH, b: ECH): Unit =
+    // assert(edges.contains(a) == edges.contains(b)) TODO: ???
+    if edges.contains(a) then
+      edges(a) -= b
+    if revEdges.contains(b) then
+      revEdges(b) -= a
+
+  def remove(a: ECH): Unit =
+    edges -= a
+    edges.values.foreach(_ -= a)
+    revEdges -= a
+    revEdges.values.foreach(_ -= a)
+
+  def containsEdge(a: ECH, b: ECH): Boolean =
+    edges.get(a).map(_.contains(b)).getOrElse(false)
+
+  def merge(a: ECH, b: ECH, ab: ECH): Unit =
+    println(s"MERGE GSUB OF $a AND $b INTO $ab   WHERE")
+    println(debugString)
+    assert(chain(a, b).nonEmpty || chain(b, a).nonEmpty)
+    // TODO: check this
+    val allLower = strictLowerBounds(a) ++ strictLowerBounds(b) + a + b
+    val allUpper = strictUpperBounds(a) ++ strictUpperBounds(b) + a + b
+    val forward = allLower.flatMap(l => allUpper.map(u => (l, u)))
+      .filterNot((l, u) =>
+        // TODO: OK?
+        (u == ab && containsEdge(l, a) && containsEdge(l, b)) ||
+          (l == ab && containsEdge(a, u) && containsEdge(b, u))
+      )
+    val lower = revEdges.getOrElse(a, mutable.Set.empty).toSet.filter(_ != b)
+      ++ revEdges.getOrElse(b, mutable.Set.empty).toSet.filter(_ != a)
+    val upper = edges.getOrElse(a, mutable.Set.empty).toSet.filter(_ != b)
+      ++ edges.getOrElse(b, mutable.Set.empty).toSet.filter(_ != a)
+    val extra = lower.map(l => (l, ab)) ++ upper.map(u => (ab, u))
+
+    remove(a)
+    remove(b)
+    forward.foreach((v1, v2) => removeIneq(v1, v2))
+    println("LOWER: "+lower)
+    println("UPPER: "+upper)
+    println("FWD: "+forward)
+    // TODO
+    //    (extra -- forward).foreach((v1, v2) => addIneq(v1, v2))
+    extra.foreach((v1, v2) => addIneq(v1, v2))
+    println("WE NOW HAVE:")
+    println(debugString)
+
+  private def dfs(from: ECH, theEdges: mutable.Map[ECH, mutable.Set[ECH]]): Set[ECH] =
+    val stack = mutable.Stack.fill(1)(from)
+    val seen = mutable.Set.empty[ECH]
+    while stack.nonEmpty do
+      val v = stack.pop()
+      if !seen.contains(v) then
+        seen += v
+        theEdges.getOrElse(v, mutable.ArrayBuffer.empty)
+          .foreach(stack.push)
+    seen.toSet
+
+  def chain(from: ECH, to: ECH): Option[Seq[ECH]] =
+    val stack = mutable.Stack((from, Seq(from)))
+    val seen = mutable.Set.empty[ECH]
+    //    println(s"CHAIN $from TO $to  KNOWING THAT:")
+    //    println(debugString)
+    while stack.nonEmpty do
+      val (v, paths) = stack.pop()
+      assert(paths.last == v)
+      if v == to then
+      //        println(s"YES: $paths")
+        return Some(paths)
+      if !seen.contains(v) then
+        seen += v
+        edges.get(v).foreach(
+          _.foreach(next => stack.push((next, paths :+ next))))
+    //    println("NOPE")
+    None
+
+  def debugString: String =
+    if edges.isEmpty then
+      "(empty gsub)"
+    else
+      edges.foldLeft(Seq.empty[String]) {
+        case (acc, (ec, his)) =>
+          acc :+ s"""[$ec] <: {${his.map(hi => s"[$hi]").mkString(", ")}}"""
+      }.mkString("\n")
+
 
 opaque type TH = Int
 
@@ -23,28 +184,41 @@ object TH:
 extension (th: TH)
   def toInt: Int = th
 
-class Knowledge:
-  val unionFind = new UnionFind
-  val gSub = new GSub
-  val members: mutable.Map[ECH, mutable.Set[TH]] = mutable.Map.empty
-
+class Knowledge private(
   // TODO: If adding fields, remember to updade merge if needed
-  val storedTypes: mutable.Map[TH, Type] = mutable.Map.empty
-  var thCounter: Int = 0
-  val ecOf: mutable.Map[TH, ECH] = mutable.Map.empty
-  val dets: mutable.Map[ECH, TH] = mutable.Map.empty
+  private val unionFind: UnionFind,
+  private val gSub: GSub,
+  private var thCounter: Int,
+  private val members: mutable.Map[ECH, mutable.Set[TH]],
+  private val revMembers: mutable.Map[TH, ECH],
+  private val storedTypes: mutable.Map[TH, Type],
+  private val dets: mutable.Map[ECH, TH],
+  private val typeVarReprs: mutable.Map[ECH, TypeVar],
+  private val revTypeVarReprs: mutable.Map[TypeVar, ECH]):
 
-  val typeVarReprs: mutable.Map[ECH, TypeVar] = mutable.Map.empty
-  val typeVarEC: mutable.Map[TypeVar, ECH] = mutable.Map.empty
+  /*def this() = this(
+    new UnionFind,
+    new GSub,
+    mutable.Map.empty,
+    mutable.Map.empty,
+    0,
+    mutable.Map.empty,
+    mutable.Map.empty,
+    mutable.Map.empty,
+    mutable.Map.empty,
+  )*/
+
+  def fresh: Knowledge = ???
+//    new Knowledge(unionFind.fresh, gSub.fresh, clonedBag(members), storedTypes.clone, thCounter, revMembers.clone, dets.clone, typeVarReprs.clone, typeVarEC.clone)
 
   //////////////////////////////////////////////////////////////////////
 
   // TODO: Is this even idiomatic ???
   object ECTypeVar:
     def unapply(tv: TypeVar): Option[ECH] =
-      // TODO: Pas de qfind fait !! A faire manuellement
-      // TODO: ~> en fait pas besoin, merge s'en occupe
-      typeVarEC.get(tv)
+    // TODO: Pas de qfind fait !! A faire manuellement
+    // TODO: ~> en fait pas besoin, merge s'en occupe
+      revTypeVarReprs.get(tv)
 
   object AppliedECTypeVar:
     def unapply(app: AppliedType): Option[(ECH, List[Type])] =
@@ -61,15 +235,15 @@ class Knowledge:
     members(a).toSet.map(storedTypes).filter(isWeaklyDet)
 
   def removeMember(th: TH): Unit =
-    val ec = ecOf(th)
-    ecOf -= th
+    val ec = revMembers(th)
+    revMembers -= th
     members(ec) -= th
-    if dets.get(ec).exists(_ == th) then
+    if dets.get(ec).contains(th) then
       dets -= ec
 
   // TODO: to enhance
   def updateMemberDet(th: TH, ty: Type)(using ctx: Context): (Set[(Type, Type)], Set[(ECH, ECH)], Set[ECH]) =
-    val ecOfTh = ecOf(th)
+    val ecOfTh = revMembers(th)
     dets.get(ecOfTh) match
       case Some(detTh) if detTh != th =>
         val detTy = storedTypes(detTh)
@@ -186,7 +360,7 @@ class Knowledge:
 
         // TODO: Comp ok ?
         if clsL == clsR then
-          // TODO: This case is meaningless, right?
+        // TODO: This case is meaningless, right?
           Some(acc)
         else if clsL.classDenot.derivesFrom(clsR) then
           // Variance of the right-hand side class, not the left
@@ -362,8 +536,8 @@ class Knowledge:
   // TODO: Messy
   def registerEqEC(a: ECH, b: ECH, aTyVar: TypeVar, bTyVar: TypeVar)(using ctx: Context) =
     assert(unionFind.find(a) == unionFind.find(b))
-//    val aTyVar = typeVarReprs(a)
-//    val bTyVar = typeVarReprs(b)
+    //    val aTyVar = typeVarReprs(a)
+    //    val bTyVar = typeVarReprs(b)
     val gadtCstrt = ctx.gadt.asInstanceOf[ProperGadtConstraint]
     var c = gadtCstrt.getConstraint
     if !c.contains(aTyVar.origin.binder) then
@@ -419,13 +593,13 @@ class Knowledge:
     val sGot = TFindOrCreateEC(s, Nil, true, true)
     println(i"TFind FOR $s: $sGot   (${sGot.toString})")
     val sTyVar = sGot.asInstanceOf[TypeVar]
-    val sEC = typeVarEC(sTyVar)
+    val sEC = revTypeVarReprs(sTyVar)
     println(i"EC: $sEC")
     println("-------")
     val tGot = TFindOrCreateEC(t, Nil, true, true)
     println(i"TFind FOR $t: $tGot")
     val tTyVar = tGot.asInstanceOf[TypeVar]
-    val tEC = typeVarEC(tTyVar)
+    val tEC = revTypeVarReprs(tTyVar)
     println(i"EC: $tEC")
 
     addIneq(sEC, tEC) match
@@ -480,7 +654,7 @@ class Knowledge:
       members -= b
       members += ab -> mutable.Set.from(membsA ++ membsB)
 
-      ecOf.mapValuesInPlace {
+      revMembers.mapValuesInPlace {
         case (_, ec) =>
           if ec == a || ec == b then ab
           else ec
@@ -501,11 +675,11 @@ class Knowledge:
       val tyVarReprB = typeVarReprs(b)
       if ab == a then
         typeVarReprs(b) = tyVarReprA
-        typeVarEC(tyVarReprB) = a
+        revTypeVarReprs(tyVarReprB) = a
       else
         assert(ab == b)
         typeVarReprs(a) = tyVarReprB
-        typeVarEC(tyVarReprA) = b
+        revTypeVarReprs(tyVarReprA) = b
 
       gSub.merge(a, b, ab)
 
@@ -519,8 +693,8 @@ class Knowledge:
       val toBeRm = members.values.flatMap(
         // Members within a same EC becoming equivalent
         ths => unordPairs(ths.toSet).filterNot((th1, th2) =>
-              TECEquiv(storedTypes(th1), storedTypes(th2))).toSet)
-//      toBeRm.foreach((th1, _) => removeMember(th1))
+          TECEquiv(storedTypes(th1), storedTypes(th2))).toSet)
+      //      toBeRm.foreach((th1, _) => removeMember(th1))
 
       // TODO: Find equivalent classes using GEC (TBD) instead of brute-forcing
       val ecsUnordPairs = unordPairs(members.keys.toSet)
@@ -562,9 +736,9 @@ class Knowledge:
               case Right(cstrts) => allCsrts ++= cstrts
               case Left(()) => assert(false)
 
-//    println(s"DET STATUS: ${(dets.contains(a), dets.contains(b))}")
-//    println(debugString)
-//    println(typeVarReprs)
+    //    println(s"DET STATUS: ${(dets.contains(a), dets.contains(b))}")
+    //    println(debugString)
+    //    println(typeVarReprs)
     // TODO: aussi pour mettre dans gadt cstrts?
 
     (dets.contains(a), dets.contains(b)) match
@@ -603,8 +777,8 @@ class Knowledge:
   // TODO: to enhance
   def propagateDeterminacy(ec: ECH, detType: Type)(using Context): (Set[(Type, Type)], Set[(ECH, ECH)]) =
     def gatherAffected(ec: ECH, det: Type, processed: Set[ECH]): (Set[TH], Set[TH], Set[ECH]) =
-//      if processed.contains(ec) then
-//        return (Set.empty, Set.empty, Set.empty)
+      //      if processed.contains(ec) then
+      //        return (Set.empty, Set.empty, Set.empty)
       // TODO: Use GEC (TBD) instead of brute-forcing
       val allMembs = allMembers
       val dnfs = allMembs.filter(th => storedTypes(th).isInstanceOf[AndOrType])
@@ -645,9 +819,9 @@ class Knowledge:
               // TODO: Simplify dnf
               s match
                 // TODO: Missing case
-//                case otherEc: ECType =>
-//                  // TODO
-//                  ???
+                //                case otherEc: ECType =>
+                //                  // TODO
+                //                  ???
                 case s if isDet(s) =>
                   val (cstrts, toMerge, dets) = updateMemberDet(h, s)
                   (accCstrts ++ cstrts, accToMerge ++ toMerge, accDets ++ dets)
@@ -673,9 +847,9 @@ class Knowledge:
           val s = dnf
           s match
             // TODO: Missing case
-//            case otherEc: ECType =>
-//              // TODO
-//              ???
+            //            case otherEc: ECType =>
+            //              // TODO
+            //              ???
             case s if isDet(s) =>
               val (cstrts, toMerge, dets) = updateMemberDet(h, s)
               (accCstrts ++ cstrts, accToMerge ++ toMerge, accDets ++ dets)
@@ -715,7 +889,7 @@ class Knowledge:
 
   def applyHeadSubst(target: Type, ec: ECH, to: Type)(using Context): Type =
     target match
-//      case t: AndOrType => applyHeadSubst(toDNF(t), ec, to)
+      //      case t: AndOrType => applyHeadSubst(toDNF(t), ec, to)
       case ECTypeVar(otherEC) if unionFind.find(otherEC) == unionFind.find(ec) =>
         to
       case AppliedECTypeVar(otherEC, args) if unionFind.find(otherEC) == unionFind.find(ec) =>
@@ -726,15 +900,15 @@ class Knowledge:
       case t: AndOrType =>
         toDNF(disjunctions(t).map(conjs => conjs.map(applyHeadSubst(_, ec, to)).reduce(AndType.make(_, _, true)))
           .reduce(OrType.make(_, _, false))) // TODO: Soft = ???
-//        val disjsSubst = mutable.Set.empty[Set[Type]]
-//        for (disjs <- disjunctions) {
-//          val conjsSubst = mutable.Set.empty[Type]
-//          for (conj <- disjs) {
-//            conjsSubst += applyHeadSubst(conj, ec, to)
-//          }
-//          disjsSubst += conjsSubst.toSet
-//        }
-//        toDNF(disjsSubst.toSet)
+      //        val disjsSubst = mutable.Set.empty[Set[Type]]
+      //        for (disjs <- disjunctions) {
+      //          val conjsSubst = mutable.Set.empty[Type]
+      //          for (conj <- disjs) {
+      //            conjsSubst += applyHeadSubst(conj, ec, to)
+      //          }
+      //          disjsSubst += conjsSubst.toSet
+      //        }
+      //        toDNF(disjsSubst.toSet)
       case hk: HKTypeLambda =>
         hk.newLikeThis(hk.paramNames, hk.paramInfos, applyHeadSubst(hk.resType, ec, to))
       case t => t
@@ -744,12 +918,12 @@ class Knowledge:
     assert(from.hasSameKindAs(to))
     (target, from) match
       case (AppliedType(tycon1: TypeRef, args1), AppliedType(tycon2: TypeRef, args2))
-      if tycon1 == tycon2 && args1.corresponds(args2)((a1, a2) => TECEquiv(a1, a2)) =>
+        if tycon1 == tycon2 && args1.corresponds(args2)((a1, a2) => TECEquiv(a1, a2)) =>
         Some(to)
 
       case (hk1@HKTypeLambda(_, AppliedType(tycon1: TypeRef, _)),
-            hk2@HKTypeLambda(_, AppliedType(tycon2: TypeRef, _)))
-      if tycon1 == tycon2 =>
+      hk2@HKTypeLambda(_, AppliedType(tycon2: TypeRef, _)))
+        if tycon1 == tycon2 =>
         val (hk2Renamed, toRenamed) = alphaRename(hk2, to.asInstanceOf[HKTypeLambda])
         assert(hk2Renamed.paramRefs == toRenamed.paramRefs)
 
@@ -761,8 +935,8 @@ class Knowledge:
         }
 
       case (AppliedType(tycon1: TypeRef, args1),
-            hk2@HKTypeLambda(_, AppliedType(tycon2: TypeRef, _)))
-      if tycon1 == tycon2 && args1.corresponds(hk2.paramRefs)((a, b) => a.hasSameKindAs(b)) =>
+      hk2@HKTypeLambda(_, AppliedType(tycon2: TypeRef, _)))
+        if tycon1 == tycon2 && args1.corresponds(hk2.paramRefs)((a, b) => a.hasSameKindAs(b)) =>
         val (hk2Renamed, toRenamed) = alphaRename(hk2, to.asInstanceOf[HKTypeLambda])
         assert(hk2Renamed.paramRefs == toRenamed.paramRefs)
         TECTryMatch(hk2Renamed.paramRefs.toSet, hk2Renamed.resType, target).flatMap {
@@ -846,9 +1020,9 @@ class Knowledge:
 
       case hk: HKTypeLambda =>
         val hkBoundsInfo = boundsInfoOf(hk)
-//        println("MATCHED HKTYPELAMBAD")
+        //        println("MATCHED HKTYPELAMBAD")
         val hkBoundsRec = BFindOrCreateEC(hkBoundsInfo, bounds, inHead, create)
-//        println("hkBoundsRec: "+hkBoundsRec)
+        //        println("hkBoundsRec: "+hkBoundsRec)
 
         hk.resType match
           // TODO: Note: match aussi class/trait
@@ -889,7 +1063,7 @@ class Knowledge:
             storedTypes.get(h) match
               case Some(s) if s.hasSimpleKind => // && TECEquiv(...)
                 if TECEquiv(t, s) then
-                  return typeVarReprs(ecOf(h))
+                  return typeVarReprs(revMembers(h))
               case _ => ()
           }
 
@@ -911,8 +1085,8 @@ class Knowledge:
                 && TECEquiv(hk.resType, hkCand.resType)
                 && BECEquiv(boundsInfoOf(hk), boundsInfoOf(hkCand)) =>
                 // TODO: Explain why we do not eta-expand...
-                return typeVarReprs(ecOf(h))
-//                return tyVar.EtaExpand(tyVar.typeParams)
+                return typeVarReprs(revMembers(h))
+              //                return tyVar.EtaExpand(tyVar.typeParams)
               case _ => ()
           }
         if create then
@@ -959,10 +1133,10 @@ class Knowledge:
     val storedTypeTH = TH.fromInt(thCounter)
     thCounter += 1
     members += newEC -> mutable.Set(storedTypeTH)
-    ecOf += storedTypeTH -> newEC
+    revMembers += storedTypeTH -> newEC
     storedTypes += storedTypeTH -> typeToStore
     typeVarReprs += newEC -> tyVarRepr
-    typeVarEC += tyVarRepr -> newEC
+    revTypeVarReprs += tyVarRepr -> newEC
 
     if isDet(typeToStore) then
       // TODO: Is this ok???
@@ -995,11 +1169,11 @@ class Knowledge:
                   val substExt = subst ++ (hk.paramRefs.toSet -- subst.keySet).map(x => x -> topOfKind(x))
                   if BECSatisfied(boundsInfoOf(hk), substExt) then
                     val substImgOrdered = orderedSubst(hk.paramRefs, substExt)
-                    val ecTyVar = typeVarReprs(ecOf(h))
+                    val ecTyVar = typeVarReprs(revMembers(h))
                     val applied = AppliedType(ecTyVar, substImgOrdered)
 
                     if notAppearingIn(bounds.map(_._2).toSet, t) && noTypeParams(applied) then
-                      TECTryFindECOfApplied(ecOf(h), substImgOrdered) match
+                      TECTryFindECOfApplied(revMembers(h), substImgOrdered) match
                         case Some(ec) => return Some(typeVarReprs(ec))
                         case None => ()
                     if notAppearingIn(bounds.map(_._2).toSet, t) then
@@ -1015,9 +1189,9 @@ class Knowledge:
       val h = candidatesIt.next()
       storedTypes(h) match
         case AppliedECTypeVar(candEC, candArgs)
-        if unionFind.find(candEC) == unionFind.find(tyconEC) &&
-          candArgs.corresponds(args)(TECEquiv) =>
-          return Some(ecOf(h))
+          if unionFind.find(candEC) == unionFind.find(tyconEC) &&
+            candArgs.corresponds(args)(TECEquiv) =>
+          return Some(revMembers(h))
         case _ => ()
     }
     None
@@ -1113,10 +1287,10 @@ class Knowledge:
         throw TryMatchFail()
 
     (t, s) match
-//      case (t: AndOrType, s) =>
-//        TECTryMatchImpl(xs, toDNF(t), s)
-//      case (t, s: AndOrType) =>
-//        TECTryMatchImpl(xs, t, toDNF(s))
+      //      case (t: AndOrType, s) =>
+      //        TECTryMatchImpl(xs, toDNF(t), s)
+      //      case (t, s: AndOrType) =>
+      //        TECTryMatchImpl(xs, t, toDNF(s))
       case (t: TypeParamRef, s) if xs.contains(t) => Map(t -> s)
 
       case (AppliedECTypeVar(ec1, args1), AppliedECTypeVar(ec2, args2)) if unionFind.find(ec1) == unionFind.find(ec2) =>
@@ -1141,8 +1315,8 @@ class Knowledge:
               TECTryCombineSubstMatch(substAcc, TECTryCombineSubstMatch(substLo, substHi))
           }
         val (substHKParams, substXs) = subst.partition((tyParam, _) => hk1Vars.contains(tyParam))
-//        val substXsFtv = substXs.values.flatMap(ftv).toSet
-//        if substHKParams.values.toSet == hk2Vars && substXsFtv.intersect(hk1Vars ++ hk2Vars).isEmpty then
+        //        val substXsFtv = substXs.values.flatMap(ftv).toSet
+        //        if substHKParams.values.toSet == hk2Vars && substXsFtv.intersect(hk1Vars ++ hk2Vars).isEmpty then
         if substHKParams.values.toSet == hk2Vars
           && substXs.values.forall(t => notAppearingIn(hk1Vars ++ hk2Vars, t)) then
           substXs
@@ -1209,25 +1383,24 @@ class Knowledge:
   //////////////////////////////////////////////////////////////////////
 
   def allTyVarsOf(ec: ECH): Set[TypeVar] =
-    typeVarEC.filter((_, cand) => cand == ec).map(_._1).toSet
+    revTypeVarReprs.filter((_, cand) => cand == ec).map(_._1).toSet
 
   def debugString(using Context): String =
     if members.isEmpty then
       return "(empty K)"
 
     val ecsContent =
-        members.foldLeft(Seq.empty[String]) {
-          case (acc, (ec, membs)) =>
-            val membsSorted = membs.toSeq.sortBy(_.toInt)
-            val tys = membsSorted.map(th => storedTypes(th).show).mkString(", ")
-            val tyVars = allTyVarsOf(ec).map(_.show).mkString(",")
-            acc :+ s"""$ec: {$tys}   (THs: {${membsSorted.mkString(",")}},  TyVars: {$tyVars})"""
-        }.mkString("\n")
-//    val ecsBelonging =
-//      ecOf.map((th, ec) => s"$th -> [$ec]").mkString(", ")
-//    val tyRepr = typeVarReprs.map((ec, tyVar) => i"[$ec] -> $tyVar").mkString(", ")
+      members.foldLeft(Seq.empty[String]) {
+        case (acc, (ec, membs)) =>
+          val membsSorted = membs.toSeq.sortBy(_.toInt)
+          val tys = membsSorted.map(th => storedTypes(th).show).mkString(", ")
+          val tyVars = allTyVarsOf(ec).map(_.show).mkString(",")
+          acc :+ s"""$ec: {$tys}   (THs: {${membsSorted.mkString(",")}},  TyVars: {$tyVars})"""
+      }.mkString("\n")
+    //    val ecsBelonging =
+    //      ecOf.map((th, ec) => s"$th -> [$ec]").mkString(", ")
+    //    val tyRepr = typeVarReprs.map((ec, tyVar) => i"[$ec] -> $tyVar").mkString(", ")
     ecsContent ++ "\n" ++ gSub.debugString
-
 
 
 case class TryMatchFail() extends Exception

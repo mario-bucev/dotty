@@ -61,6 +61,7 @@ final class ProperGadtConstraint private(
   private var myConstraint: Constraint,
   private var mapping: SimpleIdentityMap[Symbol, TypeVar],
   private var reverseMapping: SimpleIdentityMap[TypeParamRef, Symbol],
+  private var knowledge: Knowledge
 ) extends GadtConstraint with ConstraintHandling {
   import dotty.tools.dotc.config.Printers.{gadts, gadtsConstr}
 
@@ -72,7 +73,8 @@ final class ProperGadtConstraint private(
   def this() = this(
     myConstraint = new OrderingConstraint(SimpleIdentityMap.empty, SimpleIdentityMap.empty, SimpleIdentityMap.empty),
     mapping = SimpleIdentityMap.empty,
-    reverseMapping = SimpleIdentityMap.empty
+    reverseMapping = SimpleIdentityMap.empty,
+    knowledge = new Knowledge
   )
 
   /** Exposes ConstraintHandling.subsumes */
@@ -207,7 +209,8 @@ final class ProperGadtConstraint private(
   override def fresh: GadtConstraint = new ProperGadtConstraint(
     myConstraint,
     mapping,
-    reverseMapping
+    reverseMapping,
+    knowledge.fresh
   )
 
   def restore(other: GadtConstraint): Unit = other match {
@@ -215,6 +218,7 @@ final class ProperGadtConstraint private(
       this.myConstraint = other.myConstraint
       this.mapping = other.mapping
       this.reverseMapping = other.reverseMapping
+      this.knowledge = other.knowledge.fresh
     case _ => ;
   }
 

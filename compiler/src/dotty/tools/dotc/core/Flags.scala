@@ -608,3 +608,5 @@ object Flags {
   val SyntheticTypeParam: FlagSet            = Synthetic | TypeParam
   val TransparentTrait: FlagSet              = Trait | Transparent
 }
+
+
