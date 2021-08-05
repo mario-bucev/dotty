@@ -2,20 +2,38 @@ package dotty.tools
 package dotc
 package core
 
-import Variances._
-import UnionFind._
-import Types._
-import Names._
-import Decorators._
-import Contexts._
-import Symbols._
-import typer.ProtoTypes.newTypeVar
+import Variances.*
+import UnionFind.*
+import Types.*
+import Names.*
+import Decorators.*
+import Contexts.*
+import Symbols.*
+import NameKinds.DepParamName
 
 import scala.collection.mutable
 
 object GadtUtils:
 
   type BoundsInfo = List[(Variance, TypeParamRef, TypeBounds)]
+
+  def isSubtypeInFrozenConstraint(s: Type, t: Type, cstrt: Constraint)(using ctx: Context): Boolean =
+    // TODO: Not sure if we are supposed to do that...
+    val savedCstrt = ctx.typerState.constraint
+    try
+      ctx.typerState.constraint = cstrt
+      TypeComparer.isSubTypeWhenFrozen(s, t)
+    finally
+      ctx.typerState.constraint = savedCstrt
+
+  def isSameInFrozenConstraint(s: Type, t: Type, cstrt: Constraint)(using ctx: Context): Boolean =
+    // TODO: Not sure if we are supposed to do that...
+    val savedCstrt = ctx.typerState.constraint
+    try
+      ctx.typerState.constraint = cstrt
+      TypeComparer.isSameTypeWhenFrozen(s, t)
+    finally
+      ctx.typerState.constraint = savedCstrt
 
   def boundsInfoOf(hk: HKTypeLambda): BoundsInfo =
     val hkVariance =
@@ -160,22 +178,40 @@ object GadtUtils:
       HKTypeLambda(HKTypeLambda.syntheticParamNames(topForParams.size), variances)
         (_ => topForParams.map(TypeBounds.upper), _ => topForRes)
 
-  def newTypeVarOfSameKind(targetKind: Type)(using Context): TypeVar =
-    val result = newTypeVar(TypeBounds.upper(topOfKind(targetKind)))
+  def unconstrainedTypeVar(targetKind: Type)(using Context): TypeVar =
+    val poly = PolyType(List(DepParamName.fresh(EmptyTermName.toTypeName).toTypeName), List(TypeBounds.upper(topOfKind(targetKind))), defn.AnyType)
+    val result = TypeVar(poly.paramRefs.head, creatorState = null)
     assert(result.hasSameKindAs(targetKind))
     result
 
+  def unconstrainedTypeVar(targetKind: List[Type])(using Context): TypeVar =
+    val hkBound = HKTypeLambda(HKTypeLambda.syntheticParamNames(targetKind.length), targetKind.map(TypeBounds.upper compose topOfKind), defn.AnyType)
+    // TODO: Will we get targetKind => * as kind or will we get a thing that is "off by one" ?
+    unconstrainedTypeVar(hkBound)
+
+  /*
+  // TODO: To be replaced/removed
+  def newTypeVarOfSameKind(targetKind: Type)(using Context): TypeVar =
+    val result = unconstrainedTypeVar(TypeBounds.upper(topOfKind(targetKind)))
+    assert(result.hasSameKindAs(targetKind))
+    result
+
+  // TODO: To be replaced/removed
   def newHKTypeVarWithBounds(bounds: BoundsInfo)(using Context): TypeVar =
     val hkBound = HKTypeLambda(HKTypeLambda.syntheticParamNames(bounds.length), bounds.map(_._1))(
       hk => bounds.map {
         case (_, tyParam, TypeBounds(lo, hi)) =>
-          // TODO: Ok?
+          // FIXME
+          // TODO: This is almost certainly wrong, because "bounds" can be composed of many enclosing HK,
+          //  as such, the subst won't do what we expect
           TypeBounds(lo.subst(tyParam.binder, hk), hi.subst(tyParam.binder, hk))
       },
       _ => defn.AnyType // TODO: Ok ?
     )
-    newTypeVar(TypeBounds.upper(hkBound))
+    unconstrainedTypeVar(TypeBounds.upper(hkBound))
+  */
 
+  // TODO: There are surely better way to do that
   def alphaRename(l: HKTypeLambda, r: HKTypeLambda)(using Context): (HKTypeLambda, HKTypeLambda) =
     val boundsInfoL = boundsInfoOf(l)
     val boundsInfoR = boundsInfoOf(r)
@@ -209,7 +245,6 @@ object GadtUtils:
     substExt.toList.sortBy((tyParam, _) => hkParams.indexOf(tyParam)).map(_._2)
 
   def notAppearingIn(xs: Set[TypeParamRef], t: Type)(using Context): Boolean =
-  // ftv(t).intersect(xs).isEmpty
     !t.existsPart {
       case x: TypeParamRef => xs.contains(x)
       case _ => false
