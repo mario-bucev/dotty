@@ -3978,7 +3978,7 @@ object Types {
     def paramInfo(using Context): tl.PInfo = tl.paramInfos(n)
     def paramInfoAsSeenFrom(pre: Type)(using Context): tl.PInfo = paramInfo
     def paramInfoOrCompleter(using Context): Type = paramInfo
-    def paramRef(using Context): Type = tl.paramRefs(n)
+    def paramRef(using Context): ParamRef = tl.paramRefs(n)
 
     private var myVariance: FlagSet = UndefinedFlags
 

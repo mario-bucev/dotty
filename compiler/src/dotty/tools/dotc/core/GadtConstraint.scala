@@ -55,13 +55,15 @@ sealed abstract class GadtConstraint extends Showable {
   def restore(other: GadtConstraint): Unit
 
   def debugBoundsDescription(using Context): String
+
+  def constraintPatternType(pat: Type, scrut: Type)(using Context): Boolean
 }
 
 final class ProperGadtConstraint private(
   private var myConstraint: Constraint,
   private var mapping: SimpleIdentityMap[Symbol, TypeVar],
   private var reverseMapping: SimpleIdentityMap[TypeParamRef, Symbol],
-//  private var knowledge: Knowledge
+  private var knowledge: Knowledge
 ) extends GadtConstraint with ConstraintHandling {
   import dotty.tools.dotc.config.Printers.{gadts, gadtsConstr}
 
@@ -69,7 +71,7 @@ final class ProperGadtConstraint private(
     myConstraint = new OrderingConstraint(SimpleIdentityMap.empty, SimpleIdentityMap.empty, SimpleIdentityMap.empty),
     mapping = SimpleIdentityMap.empty,
     reverseMapping = SimpleIdentityMap.empty,
-//    knowledge = new Knowledge
+    knowledge = new Knowledge
   )
 
   /** Exposes ConstraintHandling.subsumes */
@@ -81,8 +83,16 @@ final class ProperGadtConstraint private(
     subsumes(extractConstraint(left), extractConstraint(right), extractConstraint(pre))
   }
 
+  override def constraintPatternType(pat: Type, scrut: Type)(using Context): Boolean =
+    val res = knowledge.constraintPatternType(pat, scrut)
+    println("Knowledge now:")
+    println(debugBoundsDescription)
+    res
+
   override def addToConstraint(params: List[Symbol])(using ctx: Context): Boolean = {
     import NameKinds.DepParamName
+
+    knowledge.addSymbols(params)
 
     val poly1 = PolyType(params.map { sym => DepParamName.fresh(sym.name.toTypeName) })(
       pt => params.map { param =>
@@ -205,7 +215,7 @@ final class ProperGadtConstraint private(
     myConstraint,
     mapping,
     reverseMapping,
-//    knowledge.fresh
+    knowledge.fresh
   )
 
   def restore(other: GadtConstraint): Unit = other match {
@@ -213,7 +223,7 @@ final class ProperGadtConstraint private(
       this.myConstraint = other.myConstraint
       this.mapping = other.mapping
       this.reverseMapping = other.reverseMapping
-//      this.knowledge = other.knowledge.fresh
+//      this.knowledge = other.knowledge // .fresh
     case _ => ;
   }
 
@@ -281,13 +291,14 @@ final class ProperGadtConstraint private(
   override def toText(printer: Printer): Texts.Text = constraint.toText(printer)
 
   override def debugBoundsDescription(using Context): String = {
-    val sb = new mutable.StringBuilder
-    sb ++= constraint.show
-    sb += '\n'
-    mapping.foreachBinding { case (sym, _) =>
-      sb ++= i"$sym: ${fullBounds(sym)}\n"
-    }
-    sb.result
+//    val sb = new mutable.StringBuilder
+//    sb ++= constraint.show
+//    sb += '\n'
+//    mapping.foreachBinding { case (sym, _) =>
+//      sb ++= i"$sym: ${fullBounds(sym)}\n"
+//    }
+//    sb.result
+    knowledge.debugString
   }
 }
 
@@ -301,6 +312,7 @@ final class ProperGadtConstraint private(
 
   override def contains(sym: Symbol)(using Context) = false
 
+  override def constraintPatternType(pat: Type, scrut: Type)(using Context): Boolean = unsupported("EmptyGadtConstraint.constraintPatternType")
   override def addToConstraint(params: List[Symbol])(using Context): Boolean = unsupported("EmptyGadtConstraint.addToConstraint")
   override def addBound(sym: Symbol, bound: Type, isUpper: Boolean)(using Context): Boolean = unsupported("EmptyGadtConstraint.addBound")
 

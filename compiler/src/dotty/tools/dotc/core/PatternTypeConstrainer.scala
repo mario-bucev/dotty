@@ -6,7 +6,7 @@ import Decorators._
 import Symbols._
 import Types._
 import Flags._
-import Contexts.ctx
+import Contexts._
 import dotty.tools.dotc.reporting.trace
 import config.Feature.migrateTo3
 import config.Printers._
@@ -73,14 +73,20 @@ trait PatternTypeConstrainer { self: TypeComparer =>
    *  scrutinee and pattern types. This does not apply if the pattern type is only applied to type variables,
    *  in which case the subtyping relationship "heals" the type.
    */
-  def constrainPatternType(pat: Type, scrut: Type, forceInvariantRefinement: Boolean = false): Boolean = trace(i"constrainPatternType($scrut, $pat)", gadts) {
-//    println(i"$pat")
-//    println(i"$scrut")
-//    val res = gadt.Gadt(pat, scrut)
-//    println("====================================")
-//    println("====================================")
-//    println("====================================\n")
-//    return res
+  def constrainPatternType(pat: Type, scrut: Type, forceInvariantRefinement: Boolean = false)(using ctx: Context): Boolean = trace(i"constrainPatternType($scrut, $pat)", gadts) {
+    println("====================================")
+    println("=========CONSTRAINT  PATMAT=========")
+    println("====================================")
+    println(i"$pat")
+    println(i"$scrut")
+    println(ctx.typerState.constraint)
+    val res = ctx.gadt.constraintPatternType(pat, scrut)
+    println(i"Got: $res")
+    println(ctx.gadt.debugBoundsDescription)
+    println("====================================")
+    println("====================================")
+    println("====================================\n")
+    return res
 
     def classesMayBeCompatible: Boolean = {
       import Flags._

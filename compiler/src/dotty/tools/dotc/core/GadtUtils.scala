@@ -130,40 +130,77 @@ object GadtUtils:
       hk => bounds.map { case (_, _, TypeBounds(lo, hi)) => TypeBounds(map(hk)(lo), map(hk)(hi)) },
       hk => map(hk)(t))
 
+  def etaExpandIfNeeded(t: Type)(using Context): Type =
+    if t.hasSimpleKind then t
+    else t.EtaExpand(t.typeParams)
+
+  def constraintsFromTyconBounds(tycon: TypeRef, appliedArgs: List[Type])(using Context): Set[(Type, Type)] =
+    assert(appliedArgs.nonEmpty)
+    val params = tycon.typeParams
+    assert(params.length == appliedArgs.length)
+    // We will need to substitute the type parameters with their corresponding appliedArgs.
+    // The TypeParamInfo contained in params depends on the nature of tycon.
+    // If tycon refers to a class, the params are all Symbols
+    // Otherwise, they are all LambdaParam
+    val (paramSyms, paramLambda) = params.partitionMap {
+      case s: Symbol => Left(s)
+      case lp: LambdaParam => Right(lp)
+    }
+    assert(paramSyms.length == appliedArgs.length ^ paramLambda.length == appliedArgs.length)
+    // Furthermore, if paramLambda is not empty, the binding of all LambdaParam refer to the same TypeLambda
+    assert(paramLambda.map(_.tl).toSet.size <= 1)
+
+    def substParams(t: Type): Type =
+      if params.nonEmpty then
+        t.subst(paramSyms, appliedArgs)
+      else
+        t.substParams(paramLambda.head.tl, appliedArgs)
+
+    params.zip(appliedArgs).foldLeft(Set.empty[(Type, Type)]) {
+      case (acc, (param, arg)) =>
+        param.paramInfo match
+          case TypeBounds(lo, hi) =>
+            val loSubsted = substParams(lo)
+            val hiSubsted = substParams(hi)
+            acc ++ Set((loSubsted, arg), (arg, hiSubsted))
+          case _ => acc
+    }
+
   // TODO: What does a "Nil" implies?
-  def upcastTo(child: ClassSymbol, args: List[Type], parentClsSym: ClassSymbol)(using Context): List[Type] =
+  def upcastTo(child: ClassSymbol, args: List[Type], parentClsSym: ClassSymbol)(using Context): (List[Type], Set[(Type, Type)]) =
+    assert(child.classDenot.derivesFrom(parentClsSym))
     val parentTypeRef = parentClsSym.classDenot.typeRef
 
-    def helper(candidate: TypeRef | AppliedType): List[Type] =
+    def helper(candidate: Type): (List[Type], Set[(Type, Type)]) =
       val tyconCandidate = candidate match
         case t: TypeRef => t
         case AppliedType(t: TypeRef, _) => t
-        case _ => assert(false)
+        case _ => return (Nil, Set.empty)
 
+      // TODO: Is this even correct ???
       if tyconCandidate == parentTypeRef then
-        candidate.subst(child.classDenot.typeParams, args) :: Nil
+        val substed = candidate.subst(child.classDenot.typeParams, args)
+        (List(substed), constraintsFromTyconBounds(tyconCandidate, substed.argInfos))
       else if tyconCandidate.symbol.isClass then
         val candClass = tyconCandidate.symbol.asClass
         if candClass.classDenot.derivesFrom(parentClsSym) then
-          candidate.subst(child.classDenot.typeParams, args) match
-            case AppliedType(_, substedArgs) =>
-              upcastTo(candClass, substedArgs, parentClsSym)
-            case _ =>
-              upcastTo(candClass, Nil, parentClsSym)
+          val substed = candidate.subst(child.classDenot.typeParams, args)
+          upcastTo(candClass, substed.argInfos, parentClsSym)
         else
-          Nil
+          (Nil, Set.empty)
       else
-        Nil
+        (Nil, Set.empty)
 
+    val childBoundsCstrts = constraintsFromTyconBounds(child.typeRef, args)
     if child == parentClsSym then
-      return List(AppliedType(child.typeRef, args))
-    assert(child.classDenot.derivesFrom(parentClsSym))
-    val allParents = child.classDenot.classInfo.parents
-    allParents.flatMap {
-      case cand: TypeRef => helper(cand)
-      case cand@AppliedType(_: TypeRef, _) => helper(cand)
-      case _ => Nil
-    }
+      (List(AppliedType(child.typeRef, args)), childBoundsCstrts)
+    else
+      val allParents = child.classDenot.classInfo.parents
+      allParents.foldLeft((List.empty[Type], childBoundsCstrts)) {
+        case ((accUpcasts, accBoundsCstrts), parentCandidate) =>
+          val (newUpcast, newBoundsCstrts) = helper(parentCandidate)
+          (accUpcasts ++ newUpcast, accBoundsCstrts ++ newBoundsCstrts)
+      }
 
   def topOfKind(targetKind: Type)(using Context): Type =
     assert(!targetKind.isAnyKind)
@@ -212,10 +249,11 @@ object GadtUtils:
   */
 
   // TODO: There are surely better way to do that
-  def alphaRename(l: HKTypeLambda, r: HKTypeLambda)(using Context): (HKTypeLambda, HKTypeLambda) =
+  def alphaRename(l: HKTypeLambda, r: HKTypeLambda)(using ctx: Context): (HKTypeLambda, HKTypeLambda) =
     val boundsInfoL = boundsInfoOf(l)
     val boundsInfoR = boundsInfoOf(r)
-    assert(boundsInfoL.corresponds(boundsInfoR) { case ((vl, tl, _), (vr, tr, _)) => vl == vr && tl.hasSameKindAs(tr) })
+    // TODO: It seems we can mix lambdas with different isDeclaredVarianceLambda...
+    assert(boundsInfoL.corresponds(boundsInfoR) { case ((vl, tl, _), (vr, tr, _)) => /*vl == vr && */ tl.hasSameKindAs(tr) })
 
     val typeMap = (boundsInfo: BoundsInfo, newHK: HKTypeLambda) => new TypeMap {
       override def apply(tp: Type): Type = tp match
@@ -256,6 +294,7 @@ object GadtUtils:
       case _ => true
     }
 
+  // TODO: Say this is incorrect for structural subtyping
   def approxDisj(c1: Option[Set[(Type, Type)]], c2: Option[Set[(Type, Type)]])(using Context): Option[Set[(Type, Type)]] =
     (c1, c2) match
       case (Some(c1), Some(c2)) =>
@@ -270,10 +309,10 @@ object GadtUtils:
           case (acc, t) =>
             // TODO: Soft = ???
             val combinedLo: Option[(Type, Type)] = lowerC1.get(t).zip(lowerC2.get(t))
-              .map((ls1, ls2) => (ls1 ++ ls2).reduce(OrType.make(_, _, false)))
+              .flatMap((ls1, ls2) => (ls1 ++ ls2).reduceOption(AndType.make(_, _, false)))
               .map(lo => (lo, t))
             val combinedHi: Option[(Type, Type)] = upperC1.get(t).zip(upperC2.get(t))
-              .map((hs1, hs2) => (hs1 ++ hs2).reduce(AndType.make(_, _, true)))
+              .flatMap((hs1, hs2) => (hs1 ++ hs2).reduceOption(OrType.make(_, _, true)))
               .map(hi => (t, hi))
             acc ++ Set(combinedLo, combinedHi).flatten
         })
