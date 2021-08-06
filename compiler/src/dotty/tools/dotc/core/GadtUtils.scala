@@ -132,7 +132,10 @@ object GadtUtils:
 
   def etaExpandIfNeeded(t: Type)(using Context): Type =
     if t.hasSimpleKind then t
-    else t.EtaExpand(t.typeParams)
+    else
+      // TODO: ...
+      val expanded = t.EtaExpand(t.typeParams).asInstanceOf[HKTypeLambda]
+      alphaRename(expanded, expanded)._1
 
   def constraintsFromTyconBounds(tycon: TypeRef, appliedArgs: List[Type])(using Context): Set[(Type, Type)] =
     assert(appliedArgs.nonEmpty)
@@ -309,10 +312,12 @@ object GadtUtils:
           case (acc, t) =>
             // TODO: Soft = ???
             val combinedLo: Option[(Type, Type)] = lowerC1.get(t).zip(lowerC2.get(t))
-              .flatMap((ls1, ls2) => (ls1 ++ ls2).reduceOption(AndType.make(_, _, false)))
+              // TODO: makeHk uses liftIfHk that is in a TypeComparer...
+              .flatMap((ls1, ls2) => (ls1 ++ ls2).reduceOption(AndType.makeHk(_, _)))
               .map(lo => (lo, t))
             val combinedHi: Option[(Type, Type)] = upperC1.get(t).zip(upperC2.get(t))
-              .flatMap((hs1, hs2) => (hs1 ++ hs2).reduceOption(OrType.make(_, _, true)))
+              // TODO: makeHk uses liftIfHk that is in a TypeComparer...
+              .flatMap((hs1, hs2) => (hs1 ++ hs2).reduceOption(OrType.makeHk(_, _)))
               .map(hi => (t, hi))
             acc ++ Set(combinedLo, combinedHi).flatten
         })
