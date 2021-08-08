@@ -68,6 +68,9 @@ object GadtUtils:
   def commonTypes(disjs: Set[Set[Type]]): Set[Type] =
     disjs.reduce(_.intersect(_))
 
+  // TODO: Need a constraint!!!!
+  // TODO: We should isDet for ECs as well ?
+  //    Comment ferait-on? genre dets.contains(ec) etc. ?
   def isDet(t: Type)(using Context): Boolean =
     t match
       case t: AndOrType =>
@@ -96,6 +99,7 @@ object GadtUtils:
       case _ =>
         false
 
+  // TODO: Need a constraint!!!!
   def isWeaklyDet(t: Type)(using Context): Boolean =
     t match
       case t: AndOrType =>
@@ -112,8 +116,18 @@ object GadtUtils:
   def unordPairs[A](s: Set[A]): Set[(A, A)] =
     if s.isEmpty || s.size == 1 then Set.empty
     else
-      s.map(a => s.flatMap(b => if a == b then Set.empty else Set(a, b)))
-        .map(pair => (pair.head, pair.last))
+      val vec = s.toVector
+      val res = mutable.Set.empty[(A, A)]
+      var i = 0
+      while i < vec.length do
+        var j = i + 1
+        while j < vec.length do
+          res += ((vec(i), vec(j)))
+          j += 1
+        i += 1
+      res.toSet
+//      s.map(a => s.map(b => if a == b then Set.empty else Set(a, b)))
+//        .map(pair => (pair.head, pair.last))
 
   def closeOver(t: Type, bounds: BoundsInfo)(using Context): Type =
     val newParams = HKTypeLambda.syntheticParamNames(bounds.length)

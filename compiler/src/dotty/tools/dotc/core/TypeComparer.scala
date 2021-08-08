@@ -625,7 +625,7 @@ class TypeComparer(@constructorOnly initctx: Context) extends ConstraintHandling
             * Note: it would be nice if this could trigger a migration warning, but I
             * am not sure how, since the code is buried so deep in subtyping logic.
             */
-            def boundsOK =
+            val boundsOK =
               migrateTo3 ||
               tp1.typeParams.corresponds(tp2.typeParams)((tparam1, tparam2) =>
                 isSubType(tparam2.paramInfo.subst(tp2, tp1), tparam1.paramInfo))
@@ -1209,8 +1209,9 @@ class TypeComparer(@constructorOnly initctx: Context) extends ConstraintHandling
             case _ =>
               false
           }
+          val theBounds = bounds(param1).hi.applyIfParameterized(args1)
           canConstrain(param1) && canInstantiate ||
-            isSubType(bounds(param1).hi.applyIfParameterized(args1), tp2, approx.addLow)
+            isSubType(theBounds, tp2, approx.addLow)
         case tycon1: TypeRef =>
           val sym = tycon1.symbol
           !sym.isClass && {
@@ -1968,7 +1969,10 @@ class TypeComparer(@constructorOnly initctx: Context) extends ConstraintHandling
   def isSameType(tp1: Type, tp2: Type): Boolean =
     if (tp1 eq NoType) false
     else if (tp1 eq tp2) true
-    else isSubType(tp1, tp2) && isSubType(tp2, tp1)
+    else
+      val r1 = isSubType(tp1, tp2)
+      val r2 = isSubType(tp2, tp1)
+      r1 && r2
 
   override protected def isSame(tp1: Type, tp2: Type)(using Context): Boolean = isSameType(tp1, tp2)
 
