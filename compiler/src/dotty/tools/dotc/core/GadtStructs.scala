@@ -202,12 +202,14 @@ class Knowledge private(
   private val storedTypes: mutable.Map[TH, Type],
   private val dets: mutable.Map[ECH, TH],
   private val typeVarReprs: mutable.Map[ECH, TypeVar],
-  private val revTypeVarReprs: mutable.Map[TypeVar, ECH]):
+  private val revTypeVarReprs: mutable.Map[TypeVar, ECH],
+  private val symsEC: mutable.Map[Symbol, ECH]):
 
   def this() = this(
     new UnionFind,
     new GSub,
     0,
+    mutable.Map.empty,
     mutable.Map.empty,
     mutable.Map.empty,
     mutable.Map.empty,
@@ -225,7 +227,10 @@ class Knowledge private(
       storedTypes.clone,
       dets.clone,
       typeVarReprs.clone,
-      revTypeVarReprs.clone)
+      revTypeVarReprs.clone,
+      symsEC.clone)
+
+  def isEmpty: Boolean = members.isEmpty
 
   //////////////////////////////////////////////////////////////////////
 
@@ -274,20 +279,49 @@ class Knowledge private(
   def updateMember(th: TH, ty: Type): Unit =
     storedTypes.update(th, ty)
 
-//  def directLowerBounds(ec: ECH): Set[Type] = ???
-////    gSub.directLowerBounds(ec).map(storedTypes)
-//
-//  def directUpperBounds(ec: ECH): Set[Type] = ???
-////    gSub.directUpperBounds(ec).map(storedTypes)
-//
-//  def directCombinedLowerBounds(ec: ECH)(using Context): Type =
-//    // TODO: soft = ???
-//    directLowerBounds(ec).reduceLeftOption(OrType.make(_, _, soft = false))
-//      .getOrElse(defn.NothingType)
-//
-//  def directCombinedUpperBounds(ec: ECH)(using Context): Type =
-//    directUpperBounds(ec).reduceLeftOption(AndType.make(_, _, checkValid = true))
-//      .getOrElse(topOfKind(typeVarReprs(ec)))
+  def inclusiveBounds(ec0: ECH)(using Context): TypeBounds =
+    val ec = unionFind.find(ec0)
+    // All types belonging to that EC are going to appear as lower and upper bounds.
+    val membs = members(ec).map(storedTypes)
+    // We explicitly filter out Nothing because it does not play nicely with HK
+    // types when mixing them with OrType/AndType.makeHk.
+    // For instance, the top of the HK type [X] =>> T is [X] =>> Any (same kind), but its bottom type is Nothing (different kind)
+    // Since Nothing and [X] ==> T do not have the same kind, OrType/AndType.makeHk mixes them in a way that is unsuitable for us.
+    // So we just filter it out. We do not need to do that for Any because it does not suffer from the same problem as Nothing.
+    val lo = allLowerBounds(ec).filter(_ != defn.NothingType)
+    val hi = allUpperBounds(ec)
+    // TODO: makeHk uses liftIfHk that is in a TypeComparer...
+    val combinedLo = (membs ++ lo).reduceLeftOption(OrType.makeHk(_, _))
+      .getOrElse(defn.NothingType)
+    // TODO: makeHk uses liftIfHk that is in a TypeComparer...
+    val combinedHi = (membs ++ hi).reduceLeftOption(AndType.makeHk(_, _))
+      .getOrElse(topOfKind(typeVarReprs(ec)))
+    TypeBounds(combinedLo, combinedHi)
+
+  def bounds(ec0: ECH)(using Context): TypeBounds =
+    val ec = unionFind.find(ec0)
+    // TODO: recursion limit exceeded if using inclusingBounds...
+    val membs = Set.empty
+    // We explicitly filter out Nothing because it does not play nicely with HK
+    // types when mixing them with OrType/AndType.makeHk.
+    // For instance, the top of the HK type [X] =>> T is [X] =>> Any (same kind), but its bottom type is Nothing (different kind)
+    // Since Nothing and [X] ==> T do not have the same kind, OrType/AndType.makeHk mixes them in a way that is unsuitable for us.
+    // So we just filter it out. We do not need to do that for Any because it does not suffer from the same problem as Nothing.
+    val lo = allLowerBounds(ec).filter(_ != defn.NothingType)
+    val hi = allUpperBounds(ec)
+    // TODO: makeHk uses liftIfHk that is in a TypeComparer...
+    val combinedLo = (membs ++ lo).reduceLeftOption(OrType.makeHk(_, _))
+      .getOrElse(defn.NothingType)
+    // TODO: makeHk uses liftIfHk that is in a TypeComparer...
+    val combinedHi = (membs ++ hi).reduceLeftOption(AndType.makeHk(_, _))
+      .getOrElse(topOfKind(typeVarReprs(ec)))
+    TypeBounds(combinedLo, combinedHi)
+
+  def allLowerBounds(ec: ECH): Set[Type] =
+    gSub.strictLowerBounds(ec).flatMap(loEC => members(loEC).map(storedTypes))
+
+  def allUpperBounds(ec: ECH): Set[Type] =
+    gSub.strictUpperBounds(ec).flatMap(hiEC => members(hiEC).map(storedTypes))
 
   //////////////////////////////////////////////////////////////////////
 
@@ -303,6 +337,7 @@ class Knowledge private(
     - Intégration des connaissances ultérieures (outer OrdCstr/GadtCstrt)
     - Check false plus poussé: par example, si Int et String sont dans la même EC, il y a contradiction
   */
+
 
   //////////////////////////////////////////////////////////////////////
 
@@ -321,6 +356,8 @@ class Knowledge private(
           case Some(detTH) =>
             cstrt.updateEntry(typeVarReprs(ec).origin, storedTypes(detTH))
           case None =>
+            cstrt.updateEntry(typeVarReprs(ec).origin, inclusiveBounds(ec))
+            /*
             val membs = membsTH.map(storedTypes)
             // We explicitly filter out Nothing because it does not play nicely with HK
             // types when mixing them with OrType/AndType.makeHk.
@@ -337,6 +374,7 @@ class Knowledge private(
             val combinedHi = (membs ++ hi).reduceLeftOption(AndType.makeHk(_, _))
               .getOrElse(topOfKind(typeVarReprs(ec)))
             cstrt.updateEntry(typeVarReprs(ec).origin, TypeBounds(combinedLo, combinedHi))
+            */
     }
     val cstrt2 = orderedECs.foldLeft(cstrt1) {
       case (cstrt, ec) =>
@@ -365,11 +403,21 @@ class Knowledge private(
     println(debugString)
     res
 
+  def findECForSym(sym: Symbol)(using Context): Option[(ECH, TypeVar)] =
+    symsEC.get(sym).map(ec => (ec, typeVarReprs(ec)))
+
+  def findOrCreateECForSym(sym: Symbol)(using Context): (ECH, TypeVar) =
+    symsEC.get(sym) match
+      case Some(ec) => (ec, typeVarReprs(ec))
+      case None =>
+        val (ec, tyVar) = TFindOrCreateEC(sym.denot.typeRef)
+        symsEC += sym -> ec
+        (ec, tyVar)
+
   def addSymbols(syms: List[Symbol])(using Context): Boolean =
     println(i"KNOWLEDGE: ADD ${syms.map(s => i"$s >: ${s.info.bounds.lo} <: ${s.info.bounds.hi}").mkString(", ")}")
     println(debugString)
-    val typeRefs = syms.map(_.denot.typeRef)
-    val (ecs, tvars) = typeRefs.map(TFindOrCreateEC).unzip
+    val (ecs, tvars) = syms.map(findOrCreateECForSym).unzip
 
     val res = syms.zip(tvars).forall {
       case (sym, symTyVar) =>
@@ -383,44 +431,19 @@ class Knowledge private(
     println(debugString)
     println("======================")
     res
-    /*
-    // TODO: Couldn't we just call simplifyLoop ??
-    val (boundsTyVar, toMerge, cstrtsFromIneq) = ecs.zip(syms).foldLeft((List.empty[(TypeVar, TypeVar)], Set.empty[(ECH, ECH)], Set.empty[(Type, Type)])) {
-      case ((boundsTyVarAcc, toMergeAcc, cstrtsAcc), (symEC, sym)) =>
-        val tb = sym.info.bounds
-        val (loEC, loTyVar) = TFindOrCreateEC(tb.lo.subst(syms, tvars))
-        val (hiEC, hiTyVar) = TFindOrCreateEC(tb.hi.subst(syms, tvars))
-        val loResult = addIneq(loEC, symEC)
-        val hiResult = addIneq(symEC, hiEC)
-
-        // TODO: Very cumbersome!!!
-        val (newToMerge, newCstrts) = (loResult, hiResult) match {
-          case (Left(()), Left(())) =>
-            (Set((loEC, symEC), (hiEC, symEC)), Set.empty)
-          case (Left(()), Right(cstrts)) =>
-            (Set((loEC, symEC)), cstrts)
-          case (Right(cstrts), Left(())) =>
-            (Set((hiEC, symEC)), cstrts)
-          case (Right(loCstrts), Right(hiCstrts)) =>
-            (Set.empty, loCstrts ++ hiCstrts)
-        }
-        (boundsTyVarAcc :+ (loTyVar, hiTyVar), toMergeAcc ++ newToMerge, cstrtsAcc ++ newCstrts)
-    }
-    val cstrtsFromMerging = mergeLoop(toMerge)
-    val res = simplifyLoop(cstrtsFromIneq ++ cstrtsFromMerging)
-    println("----------------")
-    println("ADDED THE SYMBOLS")
-    println(debugString)
-    println("======================")
-    res
-    */
 
   def addBound(sym: Symbol, bound: Type, isUpper: Boolean)(using Context): Boolean =
-    val (symEC, symTyVar) = TFindOrCreateEC(sym.denot.typeRef)
+    val (symEC, symTyVar) = findOrCreateECForSym(sym)
     val (boundEC, boundTyVar) = TFindOrCreateEC(bound)
     simplifyLoop(
       if isUpper then Set((symTyVar, boundTyVar))
       else Set((boundTyVar, symTyVar)))
+
+  def isLess(lhs: Symbol, rhs: Symbol)(using Context): Boolean =
+    findECForSym(lhs).zip(findECForSym(rhs)).map {
+      case ((lhsEC, _), (rhsEC, _)) =>
+        lhsEC == rhsEC || gSub.chain(lhsEC, rhsEC).isDefined
+    }.getOrElse(false)
 
   def simplifyLoop(cstrts: Set[(Type, Type)])(using Context): Boolean =
     val cstrtsStack = mutable.Stack.from(cstrts)
@@ -718,6 +741,11 @@ class Knowledge private(
           if ec == a || ec == b then ab
           else ec
       }
+      symsEC.mapValuesInPlace {
+        case (_, ec) =>
+          if ec == a || ec == b then ab
+          else ec
+      }
 
       if dets.contains(a) then
         val detA = dets(a)
@@ -1005,6 +1033,15 @@ class Knowledge private(
 
   //////////////////////////////////////////////////////////////////////
 
+  def TFindEC(t: Type)(using ctx: Context): Option[(ECH, TypeVar)] =
+    try
+      val got = TFindOrCreateEC(t, Nil, true, false)
+      val tyVar = got.asInstanceOf[TypeVar]
+      val ec = revTypeVarReprs(tyVar)
+      Some((ec, tyVar))
+    catch
+      case ECNotFound() => None
+
   // TODO: Name
   def TFindOrCreateEC(t: Type)(using ctx: Context): (ECH, TypeVar) =
     val got = TFindOrCreateEC(t, Nil, true, true)
@@ -1037,11 +1074,11 @@ class Knowledge private(
           case _: TypeParamRef =>
             // HK type bounded in an enclosing HK
             AppliedType(tycon, argsRec)
-          case tycon: TypeRef =>
-            if tycon.symbol.isClass && !bounds.isEmpty then AppliedType(tycon, argsRec)
-            else TECFindOrCreateEC(AppliedType(tycon, argsRec), bounds, create)
+          case tycon: TypeRef if tycon.symbol.isClass && !bounds.isEmpty =>
+            AppliedType(tycon, argsRec)
+          // TODO: Other cases ok?
           case _ =>
-            ???
+            TECFindOrCreateEC(AppliedType(tycon, argsRec), bounds, create)
 
       case t: AndOrType =>
         val dnfDisjs = disjunctions(t)
@@ -1053,8 +1090,10 @@ class Knowledge private(
               case AppliedType(tycon: TypeRef, args) if tycon.symbol.isClass =>
                 val argsRec = args.map(a => TFindOrCreateEC(a, bounds, false, create))
                 conjsRec += AppliedType(tycon, argsRec)
+              case t: TypeRef if t.symbol.isClass =>
+                conjsRec += t
               case conj =>
-                conjsRec += TECFindOrCreateEC(conj, bounds, create)
+                conjsRec += TFindOrCreateEC(conj, bounds, inHead, create)
           }
           disjsRec += conjsRec.toSet
         }
@@ -1068,7 +1107,8 @@ class Knowledge private(
 
       case tv@ECTypeVar(_) => tv
 
-      case t: TypeRef =>
+      // TODO: Typevar ok ?
+      case t: (TypeRef | TypeVar) =>
         if inHead && !bounds.isEmpty then t
         else TECFindOrCreateEC(t, bounds, create)
 
@@ -1079,8 +1119,9 @@ class Knowledge private(
 //          case AppliedType(ECTypeVar(ec), args) if args == hkBoundsInfo.map(_._2) =>
 //            typeVarReprs(ec)
           // TODO: Note: match aussi class/trait
+          // TODO: Typevar ok ?
           // [X] =>> TyCon[X]
-          case AppliedType(tycon: TypeRef, args) if args == hkBoundsInfo.map(_._2) =>
+          case AppliedType(tycon: (TypeRef | TypeVar), args) if args == hkBoundsInfo.map(_._2) =>
              TECFindOrCreateEC(hk.newLikeThis(hk.paramNames, hkBoundsRec.map(_._3), hk.resType), bounds, create)
           case _ =>
             // TODO: What if body not of simple kind ?

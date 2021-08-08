@@ -64,7 +64,7 @@ final class ProperGadtConstraint private(
   private var mapping: SimpleIdentityMap[Symbol, TypeVar],
   private var reverseMapping: SimpleIdentityMap[TypeParamRef, Symbol],
   private var knowledge: Knowledge
-) extends GadtConstraint with ConstraintHandling {
+) extends GadtConstraint {
   import dotty.tools.dotc.config.Printers.{gadts, gadtsConstr}
 
   def this() = this(
@@ -76,11 +76,14 @@ final class ProperGadtConstraint private(
 
   /** Exposes ConstraintHandling.subsumes */
   def subsumes(left: GadtConstraint, right: GadtConstraint, pre: GadtConstraint)(using Context): Boolean = {
-    def extractConstraint(g: GadtConstraint) = g match {
-      case s: ProperGadtConstraint => s.constraint
-      case EmptyGadtConstraint => OrderingConstraint.empty
-    }
-    subsumes(extractConstraint(left), extractConstraint(right), extractConstraint(pre))
+//    // TODO: Not ideal
+//    def extractConstraint(g: GadtConstraint) = g match {
+//      case s: ProperGadtConstraint => s.knowledge.asConstraint
+//      case EmptyGadtConstraint => OrderingConstraint.empty
+//    }
+//    subsumes(extractConstraint(left), extractConstraint(right), extractConstraint(pre))
+    // TODO
+    false
   }
 
   override def constraintPatternType(pat: Type, scrut: Type)(using Context): Boolean =
@@ -90,9 +93,9 @@ final class ProperGadtConstraint private(
     res
 
   override def addToConstraint(params: List[Symbol])(using ctx: Context): Boolean = {
-    import NameKinds.DepParamName
-
     knowledge.addSymbols(params)
+    /*
+    import NameKinds.DepParamName
 
     val poly1 = PolyType(params.map { sym => DepParamName.fresh(sym.name.toTypeName) })(
       pt => params.map { param =>
@@ -138,9 +141,12 @@ final class ProperGadtConstraint private(
     // The replaced symbols are picked up here.
     addToConstraint(poly1, tvars)
       .showing(i"added to constraint: [$poly1] $params%, %\n$debugBoundsDescription", gadts)
+    */
   }
 
   override def addBound(sym: Symbol, bound: Type, isUpper: Boolean)(using Context): Boolean = {
+    knowledge.addBound(sym, bound, isUpper)
+    /*
     @annotation.tailrec def stripInternalTypeVar(tp: Type): Type = tp match {
       case tv: TypeVar =>
         val inst = constraint.instType(tv)
@@ -175,21 +181,38 @@ final class ProperGadtConstraint private(
       val op = if (isUpper) "<:" else ">:"
       i"adding $descr bound $sym $op $bound = $result"
     }, gadts)
+    */
   }
 
   override def isLess(sym1: Symbol, sym2: Symbol)(using Context): Boolean =
-    constraint.isLess(tvarOrError(sym1).origin, tvarOrError(sym2).origin)
+    knowledge.isLess(sym1, sym2)
+//    constraint.isLess(tvarOrError(sym1).origin, tvarOrError(sym2).origin)
 
   override def fullBounds(sym: Symbol)(using Context): TypeBounds =
+    // TODO: ???
+    bounds(sym)
+
+    /*
+    // TODO: Not ideal
+    knowledge.TFindEC(sym.typeRef)
+      .map((_, symTyVar) => fullBounds(symTyVar.origin))
+      .getOrElse(null)
+    */
+    /*
     mapping(sym) match {
       case null => null
       case tv =>
         fullBounds(tv.origin)
           // .ensuring(containsNoInternalTypes(_))
     }
+    */
 
   override def bounds(sym: Symbol)(using Context): TypeBounds =
-    mapping(sym) match {
+    knowledge.findECForSym(sym)
+      // TODO: Bounds may return ordering between syms...
+      .map((ec, _) => knowledge.bounds(ec))
+      .getOrElse(null)
+    /*mapping(sym) match {
       case null => null
       case tv =>
         def retrieveBounds: TypeBounds =
@@ -201,14 +224,21 @@ final class ProperGadtConstraint private(
         retrieveBounds
           //.showing(i"gadt bounds $sym: $result", gadts)
           //.ensuring(containsNoInternalTypes(_))
-    }
+    }*/
 
-  override def contains(sym: Symbol)(using Context): Boolean = mapping(sym) ne null
+  override def contains(sym: Symbol)(using Context): Boolean =
+    knowledge.findECForSym(sym).isDefined
+    // mapping(sym) ne null
 
   override def approximation(sym: Symbol, fromBelow: Boolean)(using Context): Type = {
-    val res = approximation(tvarOrError(sym).origin, fromBelow = fromBelow)
-    gadts.println(i"approximating $sym ~> $res")
-    res
+//    // TODO: Not ideal
+//    knowledge.TFindEC(sym.typeRef).map((_, symTyVar) => approximation(symTyVar.origin, fromBelow))
+//      .getOrElse(NoType)
+
+//    val res = approximation(tvarOrError(sym).origin, fromBelow = fromBelow)
+//    gadts.println(i"approximating $sym ~> $res")
+//    res
+    ???
   }
 
   override def fresh: GadtConstraint = new ProperGadtConstraint(
@@ -223,21 +253,24 @@ final class ProperGadtConstraint private(
       this.myConstraint = other.myConstraint
       this.mapping = other.mapping
       this.reverseMapping = other.reverseMapping
+      // TODO: figure this thing out
 //      this.knowledge = other.knowledge // .fresh
     case _ => ;
   }
 
-  override def isEmpty: Boolean = mapping.size == 0
+  override def isEmpty: Boolean = knowledge.isEmpty
 
   // ---- Protected/internal -----------------------------------------------
-
-  override protected def constraint = myConstraint
-  override protected def constraint_=(c: Constraint) = myConstraint = c
+  /*
+  override protected def constraint = knowledge.asConstraint
+  override protected def constraint_=(c: Constraint) = ??? // myConstraint = c
 
   override protected def isSub(tp1: Type, tp2: Type)(using Context): Boolean = TypeComparer.isSubType(tp1, tp2)
   override protected def isSame(tp1: Type, tp2: Type)(using Context): Boolean = TypeComparer.isSameType(tp1, tp2)
 
   override def nonParamBounds(param: TypeParamRef)(using Context): TypeBounds =
+    ???
+    /*
     val externalizeMap = new TypeMap {
       def apply(tp: Type): Type = tp match {
         case tpr: TypeParamRef => externalize(tpr)
@@ -245,20 +278,27 @@ final class ProperGadtConstraint private(
       }
     }
     externalizeMap(constraint.nonParamBounds(param)).bounds
+    */
 
   override def fullLowerBound(param: TypeParamRef)(using Context): Type =
+    ???
+    /*
     constraint.minLower(param).foldLeft(nonParamBounds(param).lo) {
       (t, u) => t | externalize(u)
     }
+    */
 
   override def fullUpperBound(param: TypeParamRef)(using Context): Type =
+    ???
+    /*
     constraint.minUpper(param).foldLeft(nonParamBounds(param).hi) { (t, u) =>
       val eu = externalize(u)
       // Any as the upper bound means "no bound", but if F is higher-kinded,
       // Any & F = F[_]; this is wrong for us so we need to short-circuit
       if t.isAny then eu else t & eu
     }
-
+    */
+  */
   // ---- Private ----------------------------------------------------------
 
   private def externalize(param: TypeParamRef)(using Context): Type =
@@ -286,9 +326,10 @@ final class ProperGadtConstraint private(
 
   // ---- Debug ------------------------------------------------------------
 
-  override def constr = gadtsConstr
+//  override def constr = gadtsConstr
 
-  override def toText(printer: Printer): Texts.Text = constraint.toText(printer)
+  override def toText(printer: Printer): Texts.Text = ???
+    // constraint.toText(printer)
 
   override def debugBoundsDescription(using Context): String = {
 //    val sb = new mutable.StringBuilder
