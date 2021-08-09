@@ -25,7 +25,7 @@ object UnionFind:
 
   // TODO: No better way to do so ??
 
-  class UnionFind private(
+  final case class UnionFind private(
     private val elems: mutable.ArrayBuffer[Int],
     private val sizes: mutable.ArrayBuffer[Int],
   ):
@@ -66,7 +66,7 @@ object UnionFind:
 
 import UnionFind.*
 
-class GSub private(
+final case class GSub private(
   val edges: mutable.Map[ECH, mutable.Set[ECH]],
   val revEdges: mutable.Map[ECH, mutable.Set[ECH]]):
 
@@ -192,7 +192,16 @@ object TH:
 extension (th: TH)
   def toInt: Int = th
 
-class Knowledge private(
+enum TypeWithEC:
+  // TODO: "TypeParamRef" aussi, venant de enclosing HK
+  case EC(ec: ECH)
+  case AppliedEC(ec: ECH, args: List[TypeWithEC])
+  case Gnd(ty: TypeRef)
+  case AppliedGnd(ty: TypeRef, args: List[TypeWithEC])
+  case DNF(disjs: List[List[TypeWithEC]])
+  case HK() // TODO: Pah ! Et les TypeParamRef ???
+
+final case class Knowledge private(
   // TODO: If adding fields, remember to updade merge if needed
   private val unionFind: UnionFind,
   private val gSub: GSub,
@@ -218,7 +227,7 @@ class Knowledge private(
     mutable.Map.empty)
 
   def fresh: Knowledge =
-    new Knowledge(
+    val res = new Knowledge(
       unionFind.fresh,
       gSub.fresh,
       thCounter,
@@ -229,6 +238,8 @@ class Knowledge private(
       typeVarReprs.clone,
       revTypeVarReprs.clone,
       symsEC.clone)
+    assert(res == this)
+    res
 
   def isEmpty: Boolean = members.isEmpty
 
@@ -279,61 +290,50 @@ class Knowledge private(
   def updateMember(th: TH, ty: Type): Unit =
     storedTypes.update(th, ty)
 
-  def inclusiveBounds(ec0: ECH)(using Context): TypeBounds =
+  def bounds(ec0: ECH, inclusive: Boolean)(using Context): TypeBounds =
     val ec = unionFind.find(ec0)
     // All types belonging to that EC are going to appear as lower and upper bounds.
-    val membs = members(ec).map(storedTypes)
+    val equalTypes =
+      if inclusive then members(ec).map(storedTypes)
+      else Set.empty
     // We explicitly filter out Nothing because it does not play nicely with HK
     // types when mixing them with OrType/AndType.makeHk.
     // For instance, the top of the HK type [X] =>> T is [X] =>> Any (same kind), but its bottom type is Nothing (different kind)
     // Since Nothing and [X] ==> T do not have the same kind, OrType/AndType.makeHk mixes them in a way that is unsuitable for us.
     // So we just filter it out. We do not need to do that for Any because it does not suffer from the same problem as Nothing.
-    val lo = allLowerBounds(ec).filter(_ != defn.NothingType)
-    val hi = allUpperBounds(ec)
+    val lo = strictLowerBounds(ec).filter(_ != defn.NothingType)
+    val hi = strictUpperBounds(ec)
     // TODO: makeHk uses liftIfHk that is in a TypeComparer...
-    val combinedLo = (membs ++ lo).reduceLeftOption(OrType.makeHk(_, _))
+    val combinedLo = (equalTypes ++ lo).reduceLeftOption(OrType.makeHk(_, _))
       .getOrElse(defn.NothingType)
     // TODO: makeHk uses liftIfHk that is in a TypeComparer...
-    val combinedHi = (membs ++ hi).reduceLeftOption(AndType.makeHk(_, _))
+    val combinedHi = (equalTypes ++ hi).reduceLeftOption(AndType.makeHk(_, _))
       .getOrElse(topOfKind(typeVarReprs(ec)))
     TypeBounds(combinedLo, combinedHi)
 
-  def bounds(ec0: ECH)(using Context): TypeBounds =
-    val ec = unionFind.find(ec0)
-    // TODO: recursion limit exceeded if using inclusingBounds...
-    val membs = Set.empty
-    // We explicitly filter out Nothing because it does not play nicely with HK
-    // types when mixing them with OrType/AndType.makeHk.
-    // For instance, the top of the HK type [X] =>> T is [X] =>> Any (same kind), but its bottom type is Nothing (different kind)
-    // Since Nothing and [X] ==> T do not have the same kind, OrType/AndType.makeHk mixes them in a way that is unsuitable for us.
-    // So we just filter it out. We do not need to do that for Any because it does not suffer from the same problem as Nothing.
-    val lo = allLowerBounds(ec).filter(_ != defn.NothingType)
-    val hi = allUpperBounds(ec)
-    // TODO: makeHk uses liftIfHk that is in a TypeComparer...
-    val combinedLo = (membs ++ lo).reduceLeftOption(OrType.makeHk(_, _))
-      .getOrElse(defn.NothingType)
-    // TODO: makeHk uses liftIfHk that is in a TypeComparer...
-    val combinedHi = (membs ++ hi).reduceLeftOption(AndType.makeHk(_, _))
-      .getOrElse(topOfKind(typeVarReprs(ec)))
-    TypeBounds(combinedLo, combinedHi)
-
-  def allLowerBounds(ec: ECH): Set[Type] =
+  def strictLowerBounds(ec: ECH): Set[Type] =
     gSub.strictLowerBounds(ec).flatMap(loEC => members(loEC).map(storedTypes))
 
-  def allUpperBounds(ec: ECH): Set[Type] =
+  def strictUpperBounds(ec: ECH): Set[Type] =
     gSub.strictUpperBounds(ec).flatMap(hiEC => members(hiEC).map(storedTypes))
 
   //////////////////////////////////////////////////////////////////////
 
   /*
   TODO: Certains points à résoundre:
+    - FindEC et tout ce bazard est vraiment nul est à repenser
+    - Voir là où il y a besoin de faire des unionFind.find d'ec
+    - Cette histoire de restore/fresh etc.
+        - ça à l'air ""OK""
+    - Pas déterministe --'
+    - Meilleur logging, là c'est un peu le bazard
+    - Des assertions d'invariants
+    - cache asConstraint
+    - Les TypeParamRef ne sont pas forcément des param qui sont bound à un outer scope!!!
+      - C'est souvent utilisé un peu comme des tyvars (voir Constraint et les TypeLambda)
+    - refn et path-dependant types
+    -
     - Voir la différence entre GadtCstr et OrdCstrts dans isSubtype
-    - Les inégalités entres ECs ne sont pas prise en compte lorsqu'on fait un check isSubtype
-      - 2 possibilités:
-        - On ajoute des <= et >= entre les ECs et les membres ECs dans GadtConstraint
-        - OU on fait notre propre isSubtype
-          - De tte façon, il faudra un jour ou l'autre intégrer ces égalités+inégalités dans GadtCstrts/OrderingCstrts
-          alors, autant le faire tte de suite?
     - Intégration des connaissances ultérieures (outer OrdCstr/GadtCstrt)
     - Check false plus poussé: par example, si Int et String sont dans la même EC, il y a contradiction
   */
@@ -356,25 +356,7 @@ class Knowledge private(
           case Some(detTH) =>
             cstrt.updateEntry(typeVarReprs(ec).origin, storedTypes(detTH))
           case None =>
-            cstrt.updateEntry(typeVarReprs(ec).origin, inclusiveBounds(ec))
-            /*
-            val membs = membsTH.map(storedTypes)
-            // We explicitly filter out Nothing because it does not play nicely with HK
-            // types when mixing them with OrType/AndType.makeHk.
-            // For instance, the top of the HK type [X] =>> T is [X] =>> Any (same kind), but its bottom type is Nothing (different kind)
-            // Since Nothing and [X] ==> T do not have the same kind, OrType/AndType.makeHk mixes them in a way that is unsuitable for us.
-            // So we just filter it out. We do not need to do that for Any because it does not suffer from the same problem as Nothing.
-            val lo = gSub.directLowerBounds(ec).flatMap(loEC => members(loEC).map(storedTypes))
-              .filter(_ != defn.NothingType)
-            val hi = gSub.directUpperBounds(ec).flatMap(hiEC => members(hiEC).map(storedTypes))
-            // TODO: makeHk uses liftIfHk that is in a TypeComparer...
-            val combinedLo = (membs ++ lo).reduceLeftOption(OrType.makeHk(_, _))
-              .getOrElse(defn.NothingType)
-            // TODO: makeHk uses liftIfHk that is in a TypeComparer...
-            val combinedHi = (membs ++ hi).reduceLeftOption(AndType.makeHk(_, _))
-              .getOrElse(topOfKind(typeVarReprs(ec)))
-            cstrt.updateEntry(typeVarReprs(ec).origin, TypeBounds(combinedLo, combinedHi))
-            */
+            cstrt.updateEntry(typeVarReprs(ec).origin, bounds(ec, inclusive = true))
     }
     val cstrt2 = orderedECs.foldLeft(cstrt1) {
       case (cstrt, ec) =>
@@ -394,19 +376,20 @@ class Knowledge private(
     }
     cstrt3
 
+
   def constraintPatternType(pat: Type, scrut: Type)(using Context): Boolean =
     val cstrts = createConstraints(pat, scrut)
-    println(i"Constraint for $scrut matches $pat:")
-    println("  " ++ cstrts.map((s, t) => i"$s <: $t").mkString(", "))
+//    println(i"Constraint for $scrut matches $pat:")
+//    println("  " ++ cstrts.map((s, t) => i"$s <: $t").mkString(", "))
     val res = simplifyLoop(cstrts)
-    println("DONE")
-    println(debugString)
+//    println("DONE")
+//    println(debugString)
     res
 
-  def findECForSym(sym: Symbol)(using Context): Option[(ECH, TypeVar)] =
+  def findECForSym(sym: Symbol)(using ctx: Context): Option[(ECH, TypeVar)] =
     symsEC.get(sym).map(ec => (ec, typeVarReprs(ec)))
 
-  def findOrCreateECForSym(sym: Symbol)(using Context): (ECH, TypeVar) =
+  def findOrCreateECForSym(sym: Symbol)(using ctx: Context): (ECH, TypeVar) =
     symsEC.get(sym) match
       case Some(ec) => (ec, typeVarReprs(ec))
       case None =>
@@ -415,8 +398,8 @@ class Knowledge private(
         (ec, tyVar)
 
   def addSymbols(syms: List[Symbol])(using Context): Boolean =
-    println(i"KNOWLEDGE: ADD ${syms.map(s => i"$s >: ${s.info.bounds.lo} <: ${s.info.bounds.hi}").mkString(", ")}")
-    println(debugString)
+//    println(i"KNOWLEDGE: ADD ${syms.map(s => i"$s >: ${s.info.bounds.lo} <: ${s.info.bounds.hi}").mkString(", ")}")
+//    println(debugString)
     val (ecs, tvars) = syms.map(findOrCreateECForSym).unzip
 
     val res = syms.zip(tvars).forall {
@@ -426,10 +409,10 @@ class Knowledge private(
         val (_, hiTyVar) = TFindOrCreateEC(tb.hi.subst(syms, tvars))
         simplifyLoop(Set((loTyVar, symTyVar), (symTyVar, hiTyVar)))
     }
-    println("----------------")
-    println("ADDED THE SYMBOLS")
-    println(debugString)
-    println("======================")
+//    println("----------------")
+//    println("ADDED THE SYMBOLS")
+//    println(debugString)
+//    println("======================")
     res
 
   def addBound(sym: Symbol, bound: Type, isUpper: Boolean)(using Context): Boolean =
@@ -449,11 +432,11 @@ class Knowledge private(
     val cstrtsStack = mutable.Stack.from(cstrts)
     while cstrtsStack.nonEmpty do
       val (s, t) = cstrtsStack.pop()
-      println(i"DEDUCTION FOR $s <: $t")
+//      println(i"DEDUCTION FOR $s <: $t")
       deductionIneq(s, t) match
         case Some(deductions) =>
-          println("--> We have: " + deductions.map((a, b) => i"$a <: $b").mkString(", "))
-          println("---------------------\n")
+//          println("--> We have: " + deductions.map((a, b) => i"$a <: $b").mkString(", "))
+//          println("---------------------\n")
           val newCsrtrts = deductions.foldLeft(Set.empty[(Type, Type)]) {
             case (acc, (u, v)) => acc ++ compact(u, v)
           }
@@ -702,12 +685,12 @@ class Knowledge private(
 
   def compact(s: Type, t: Type)(using ctx: Context): Set[(Type, Type)] =
     val msg = i"COMPACT $s <: $t"
-    println(msg)
-    println(debugString)
+//    println(msg)
+//    println(debugString)
     val (sEC, sTyVar) = TFindOrCreateEC(s)
-    println(i"EC for $s is [$sEC] (with tyvar $sTyVar)")
+//    println(i"EC for $s is [$sEC] (with tyvar $sTyVar)")
     val (tEC, tTyVar) = TFindOrCreateEC(t)
-    println(i"EC for $t is [$tEC] (with tyvar $tTyVar)")
+//    println(i"EC for $t is [$tEC] (with tyvar $tTyVar)")
 
     addIneq(sEC, tEC) match
       case Left(()) =>
@@ -796,8 +779,8 @@ class Knowledge private(
 
     ///////////////////////////////////////
 
-    println(s"MERGING $a WITH $b")
-    println(debugString)
+//    println(s"MERGING $a WITH $b")
+//    println(debugString)
 
     val allCsrts = mutable.Set.empty[(Type, Type)]
     val allToMerge = mutable.Set.empty[(ECH, ECH)]
@@ -848,10 +831,10 @@ class Knowledge private(
     val (cstrts, toMerge) = helper
     allCsrts ++= cstrts
     allToMerge ++= toMerge
-    println("MERGE FINISHED:")
-    println(debugString)
-    println("NEW CSTRST: "+allCsrts.map((s, t) => i"$s <: $t").mkString(", "))
-    println("NEW TO MERGE: "+toMerge)
+//    println("MERGE FINISHED:")
+//    println(debugString)
+//    println("NEW CSTRST: "+allCsrts.map((s, t) => i"$s <: $t").mkString(", "))
+//    println("NEW TO MERGE: "+toMerge)
     (allCsrts.toSet, allToMerge.toSet)
 
   // TODO: to enhance
@@ -1060,11 +1043,8 @@ class Knowledge private(
     inHead: Boolean,
     create: Boolean)(using ctx: Context): Type =
     val t = etaExpandIfNeeded(t0)
-
     t match
-      case t: TypeParamRef =>
-        // TODO: Même si higher-kinded ? ~> il semblerait que oui
-        t
+      case t: TypeParamRef => t
 
       case AppliedType(tycon, args) =>
         val argsRec = args.map(a => TFindOrCreateEC(a, bounds, false, create))
@@ -1118,7 +1098,6 @@ class Knowledge private(
         hk.resType match
 //          case AppliedType(ECTypeVar(ec), args) if args == hkBoundsInfo.map(_._2) =>
 //            typeVarReprs(ec)
-          // TODO: Note: match aussi class/trait
           // TODO: Typevar ok ?
           // [X] =>> TyCon[X]
           case AppliedType(tycon: (TypeRef | TypeVar), args) if args == hkBoundsInfo.map(_._2) =>
@@ -1178,16 +1157,13 @@ class Knowledge private(
                 && TECEquiv(hk, hkCand) => // TODO: Takes care of bounds?
                 // && BECEquiv(boundsInfoOf(hk), boundsInfoOf(hkCand)) =>
                 // TODO: Explain why we do not eta-expand...
-                return typeVarReprs(revMembers(h)) // return tyVar.EtaExpand(tyVar.typeParams)
+                return typeVarReprs(revMembers(h))
               case _ => ()
           }
         if create then
           TECCreate(t, bounds)
         else
           throw ECNotFound()
-
-      case _ =>
-        ???
 
   def TECCreate(t: Type, scope: BoundsInfo)(using ctx: Context): Type =
     val newEC = unionFind.add()
@@ -1216,8 +1192,6 @@ class Knowledge private(
             (closeOver(hk.resType, newHKBoundsInfo),
               tyVarRepr,
               closeOver(AppliedType(tyVarRepr, newHKBoundsInfo.map(_._2)), hkBoundsInfo))
-
-        case _ => ???
     }
 
     val storedTypeTH = TH.fromInt(thCounter)
@@ -1279,8 +1253,57 @@ class Knowledge private(
 
   //////////////////////////////////////////////////////////////////////////////////
 
-  // TODO: Good enough ?
-  // TODO: Il semblerait que cela ne marche pas bien en présence de dnf...
+  def isDet(t: Type)(using ctx: Context): Boolean =
+    t match
+      case t: AndOrType =>
+        val disjsSet = disjunctions(t)
+        if !disjsSet.forall(_.forall(isDet)) then
+          return false
+        val disjs = disjsSet.map(conj => conj.reduce(AndType.make(_, _)))
+
+        // TODO: Verify this
+        val combinedConstraints = ctx.typerState.constraint & (asConstraint, false)
+
+        def noSubDisjs = unordPairs(disjs).forall((disj1, disj2) =>
+          !isSubtypeInFrozenConstraint(disj1, disj2, combinedConstraints) &&
+            !isSubtypeInFrozenConstraint(disj2, disj1, combinedConstraints))
+
+        def noSubConjs = disjsSet.forall(conj =>
+          unordPairs(conj).forall((t1, t2) =>
+            !isSubtypeInFrozenConstraint(t1, t2, combinedConstraints) &&
+              !isSubtypeInFrozenConstraint(t2, t1, combinedConstraints)))
+
+        noSubDisjs && noSubConjs
+      // TODO: Et les gnd types ???
+      case AppliedType(tycon: TypeRef, _) if tycon.symbol.isClass =>
+        true
+      case t: TypeRef if t.symbol.isClass =>
+        true
+      case hk: HKTypeLambda =>
+        isDet(hk.resType)
+      case ECTypeVar(ec) =>
+        dets.get(unionFind.find(ec)).isDefined
+      case _ =>
+        false
+
+  def isWeaklyDet(t: Type)(using Context): Boolean =
+    t match
+      case t: AndOrType =>
+        disjunctions(t).forall(_.forall(isWeaklyDet))
+      case AppliedType(tycon: TypeRef, _) if tycon.symbol.isClass =>
+        true
+      case t: TypeRef if t.symbol.isClass =>
+        true
+      case hk: HKTypeLambda =>
+        isWeaklyDet(hk.resType)
+      case ECTypeVar(ec) =>
+        // If an EC is determined, it is weakly determined as well
+        dets.get(unionFind.find(ec)).isDefined
+      case _ =>
+        false
+
+  //////////////////////////////////////////////////////////////////////////////////
+
   def TECEquiv(t: Type, s: Type)(using ctx: Context): Boolean =
     // TODO: Verify this
     val combinedConstraints = ctx.typerState.constraint & (asConstraint, false)

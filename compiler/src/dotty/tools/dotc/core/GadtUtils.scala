@@ -68,51 +68,6 @@ object GadtUtils:
   def commonTypes(disjs: Set[Set[Type]]): Set[Type] =
     disjs.reduce(_.intersect(_))
 
-  // TODO: Need a constraint!!!!
-  // TODO: We should isDet for ECs as well ?
-  //    Comment ferait-on? genre dets.contains(ec) etc. ?
-  def isDet(t: Type)(using Context): Boolean =
-    t match
-      case t: AndOrType =>
-        val disjsSet = disjunctions(t)
-        if !disjsSet.forall(_.forall(isDet)) then
-          return false
-        val disjs = disjsSet.map(conj => conj.reduce(AndType.make(_, _)))
-
-        def noSubDisjs = unordPairs(disjs).forall((disj1, disj2) =>
-          TypeComparer.isSubTypeWhenFrozen(disj1, disj2) &&
-            TypeComparer.isSubTypeWhenFrozen(disj2, disj1))
-
-        def noSubConjs = disjsSet.forall(conj =>
-          unordPairs(conj).forall((t1, t2) =>
-            TypeComparer.isSubTypeWhenFrozen(t1, t2) &&
-              TypeComparer.isSubTypeWhenFrozen(t2, t1)))
-
-        noSubDisjs && noSubConjs
-      // TODO: Et les gnd types ???
-      case AppliedType(tycon: TypeRef, _) if tycon.symbol.isClass =>
-        true
-      case t: TypeRef if t.symbol.isClass =>
-        true
-      case hk: HKTypeLambda =>
-        isDet(hk.resType)
-      case _ =>
-        false
-
-  // TODO: Need a constraint!!!!
-  def isWeaklyDet(t: Type)(using Context): Boolean =
-    t match
-      case t: AndOrType =>
-        disjunctions(t).forall(_.forall(isWeaklyDet))
-      case AppliedType(tycon: TypeRef, _) if tycon.symbol.isClass =>
-        true
-      case t: TypeRef if t.symbol.isClass =>
-        true
-      case hk: HKTypeLambda =>
-        isWeaklyDet(hk.resType)
-      case _ =>
-        false
-
   def unordPairs[A](s: Set[A]): Set[(A, A)] =
     if s.isEmpty || s.size == 1 then Set.empty
     else
@@ -152,9 +107,11 @@ object GadtUtils:
       alphaRename(expanded, expanded)._1
 
   def constraintsFromTyconBounds(tycon: TypeRef, appliedArgs: List[Type])(using Context): Set[(Type, Type)] =
-    assert(appliedArgs.nonEmpty)
     val params = tycon.typeParams
     assert(params.length == appliedArgs.length)
+    if appliedArgs.length == 0 then
+      return Set.empty
+
     // We will need to substitute the type parameters with their corresponding appliedArgs.
     // The TypeParamInfo contained in params depends on the nature of tycon.
     // If tycon refers to a class, the params are all Symbols

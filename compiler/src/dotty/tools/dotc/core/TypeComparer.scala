@@ -1286,10 +1286,17 @@ class TypeComparer(@constructorOnly initctx: Context) extends ConstraintHandling
     else if tp1 eq tp2 then true
     else
       val saved = constraint
-      val savedGadt = ctx.gadt.fresh
+      val savedGadt =
+        if !frozenConstraint then ctx.gadt.fresh
+        else null
+
       inline def restore() =
         state.constraint = saved
-        ctx.gadt.restore(savedGadt)
+        // TODO: on veut pas restore un gadt si on est pas en frozen gadt
+        //    Il faudrait employer un autre flag, parce que là c'est vraiment pas terrible...
+        if !frozenConstraint then
+          ctx.gadt.restore(savedGadt)
+
       val savedSuccessCount = successCount
       try
         recCount += 1
@@ -1685,20 +1692,26 @@ class TypeComparer(@constructorOnly initctx: Context) extends ConstraintHandling
    */
   private def necessaryEither(op1: => Boolean, op2: => Boolean): Boolean =
     val preConstraint = constraint
-    val preGadt = ctx.gadt.fresh
-
+    val preGadt =
+      if !frozenConstraint then ctx.gadt.fresh
+      else null
     def allSubsumes(leftGadt: GadtConstraint, rightGadt: GadtConstraint, left: Constraint, right: Constraint): Boolean =
-      subsumes(left, right, preConstraint) && preGadt.match
-        case preGadt: ProperGadtConstraint =>
-          preGadt.subsumes(leftGadt, rightGadt, preGadt)
-        case _ =>
-          true
-
+      // TODO
+      false
+//      subsumes(left, right, preConstraint) && preGadt.match
+//        case preGadt: ProperGadtConstraint =>
+//          preGadt.subsumes(leftGadt, rightGadt, preGadt)
+//        case _ =>
+//          true
+    // TODO: We may not need all of this after all ?
     if op1 then
       val op1Constraint = constraint
-      val op1Gadt = ctx.gadt.fresh
+      val op1Gadt =
+        if !frozenConstraint then ctx.gadt.fresh
+        else null
       constraint = preConstraint
-      ctx.gadt.restore(preGadt)
+      if !frozenConstraint then
+        ctx.gadt.restore(preGadt)
       if op2 then
         if allSubsumes(op1Gadt, ctx.gadt, op1Constraint, constraint) then
           gadts.println(i"GADT CUT - prefer ${ctx.gadt} over $op1Gadt")
@@ -1707,15 +1720,18 @@ class TypeComparer(@constructorOnly initctx: Context) extends ConstraintHandling
           gadts.println(i"GADT CUT - prefer $op1Gadt over ${ctx.gadt}")
           constr.println(i"CUT - prefer $op1Constraint over $constraint")
           constraint = op1Constraint
-          ctx.gadt.restore(op1Gadt)
+          if !frozenConstraint then
+            ctx.gadt.restore(op1Gadt)
         else
           gadts.println(i"GADT CUT - no constraint is preferable, reverting to $preGadt")
           constr.println(i"CUT - no constraint is preferable, reverting to $preConstraint")
           constraint = preConstraint
-          ctx.gadt.restore(preGadt)
+          if !frozenConstraint then
+            ctx.gadt.restore(preGadt)
       else
         constraint = op1Constraint
-        ctx.gadt.restore(op1Gadt)
+        if !frozenConstraint then
+          ctx.gadt.restore(op1Gadt)
       true
     else op2
   end necessaryEither
