@@ -88,10 +88,14 @@ final class ProperGadtConstraint private(
     false
   }
 
-  override def constraintPatternType(pat: Type, scrut: Type)(using Context): Boolean = performWork {
+  override def constraintPatternType(pat: Type, scrut: Type)(using ctx: Context): Boolean = performWork {
     val res = knowledge.constraintPatternType(pat, scrut)
 //    println("Knowledge now:")
 //    println(debugBoundsDescription)
+    // TODO: This seems too simple
+    if res then
+//      ctx.typerState.constraint = ctx.typerState.constraint & (knowledge.asExternalizedConstraint, false)
+      ctx.typerState.constraint = knowledge.asExternalizedConstraint
     res
   }
 
@@ -109,14 +113,19 @@ final class ProperGadtConstraint private(
 
   override def fullBounds(sym: Symbol)(using ctx: Context): TypeBounds = performWork {
     // TODO: ???
-    bounds(sym)
+    val res = bounds(sym)
+    res
   }
 
   override def bounds(sym: Symbol)(using ctx: Context): TypeBounds = performWork {
-    knowledge.findECForSym(sym)
+    /*
+    val res = knowledge.findECForSym(sym)
       // TODO: Bounds may return ordering between syms, which the doc comment says that it does not...
-      .map((ec, _) => knowledge.bounds(ec, inclusive = false))
+      .map((ec, _) => knowledge.bounds(ec, inclusive = true))
       .getOrElse(null)
+    */
+    val res = knowledge.boundsForSym(sym)
+    res
   }
 
   override def contains(sym: Symbol)(using Context): Boolean =
@@ -221,7 +230,7 @@ final class ProperGadtConstraint private(
 //      sb ++= i"$sym: ${fullBounds(sym)}\n"
 //    }
 //    sb.result
-    knowledge.debugString
+    knowledge.debugString ++ "\n" ++ knowledge.asExternalizedConstraint.show
   }
 }
 

@@ -10,6 +10,7 @@ import Decorators.*
 import Contexts.*
 import Symbols.*
 import NameKinds.DepParamName
+import typer.ProtoTypes.newTypeVar
 
 import scala.collection.mutable
 
@@ -66,7 +67,8 @@ object GadtUtils:
         Set(Set(t))
 
   def commonTypes(disjs: Set[Set[Type]]): Set[Type] =
-    disjs.reduce(_.intersect(_))
+    if disjs.isEmpty then Set.empty
+    else disjs.reduce(_.intersect(_))
 
   def unordPairs[A](s: Set[A]): Set[(A, A)] =
     if s.isEmpty || s.size == 1 then Set.empty
@@ -189,9 +191,9 @@ object GadtUtils:
       HKTypeLambda(HKTypeLambda.syntheticParamNames(topForParams.size), variances)
         (_ => topForParams.map(TypeBounds.upper), _ => topForRes)
 
-  def unconstrainedTypeVar(targetKind: Type)(using Context): TypeVar =
+  def unconstrainedTypeVar(targetKind: Type)(using ctx: Context): TypeVar =
     val poly = PolyType(List(DepParamName.fresh(EmptyTermName.toTypeName).toTypeName), List(TypeBounds.upper(topOfKind(targetKind))), defn.AnyType)
-    val result = TypeVar(poly.paramRefs.head, creatorState = null)
+    val result = TypeVar(poly.paramRefs.head, creatorState = ctx.typerState) // TODO: ???
     assert(result.hasSameKindAs(targetKind))
     result
 
