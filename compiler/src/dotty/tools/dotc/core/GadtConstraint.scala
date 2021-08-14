@@ -113,7 +113,7 @@ final class ProperGadtConstraint private(
 
   override def fullBounds(sym: Symbol)(using ctx: Context): TypeBounds = performWork {
     // TODO: ???
-    val res = bounds(sym)
+    val res = knowledge.boundsForSym(sym)
     res
   }
 
@@ -230,7 +230,8 @@ final class ProperGadtConstraint private(
 //      sb ++= i"$sym: ${fullBounds(sym)}\n"
 //    }
 //    sb.result
-    knowledge.debugString ++ "\n" ++ knowledge.asExternalizedConstraint.show
+    val ext = knowledge.asExternalizedConstraint
+    knowledge.debugString ++ "\n" ++ ext.show
   }
 }
 
