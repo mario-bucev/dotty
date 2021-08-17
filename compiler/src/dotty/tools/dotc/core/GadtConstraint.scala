@@ -90,11 +90,8 @@ final class ProperGadtConstraint private(
 
   override def constraintPatternType(pat: Type, scrut: Type)(using ctx: Context): Boolean = performWork {
     val res = knowledge.constraintPatternType(pat, scrut)
-//    println("Knowledge now:")
-//    println(debugBoundsDescription)
     // TODO: This seems too simple
     if res then
-//      ctx.typerState.constraint = ctx.typerState.constraint & (knowledge.asExternalizedConstraint, false)
       ctx.typerState.constraint = knowledge.asExternalizedConstraint
     res
   }
@@ -132,10 +129,29 @@ final class ProperGadtConstraint private(
     knowledge.findECForSym(sym).isDefined
 
   override def approximation(sym: Symbol, fromBelow: Boolean)(using Context): Type = {
-//    val res = approximation(tvarOrError(sym).origin, fromBelow = fromBelow)
-//    gadts.println(i"approximating $sym ~> $res")
-//    res
-    ???
+    val param = knowledge.findECForSym(sym).get._2.origin
+    // TODO: Why can we refer to internal tyvars??? The original impl. does not externalize anything
+    val cstrt = knowledge.asConstraint
+    // TODO: Copy/paste from ConstraintHandling...
+    // TODO: Copy/paste from ConstraintHandling...
+    // TODO: Copy/paste from ConstraintHandling...
+
+    def nonParamBounds(param: TypeParamRef): TypeBounds = cstrt.nonParamBounds(param)
+
+    def fullLowerBound(param: TypeParamRef): Type =
+      cstrt.minLower(param).foldLeft(nonParamBounds(param).lo)(_ | _)
+
+    def fullUpperBound(param: TypeParamRef): Type =
+      cstrt.minUpper(param).foldLeft(nonParamBounds(param).hi)(_ & _)
+
+    cstrt.entry(param) match
+      case entry: TypeBounds =>
+        val useLowerBound = fromBelow || param.occursIn(entry.hi)
+        val inst = if useLowerBound then fullLowerBound(param) else fullUpperBound(param)
+        inst
+      case inst =>
+        assert(inst.exists)
+        inst
   }
 
   override def fresh: GadtConstraint =

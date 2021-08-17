@@ -1,6 +1,4 @@
-package dotty.tools
-package dotc
-package core
+package dotty.tools.dotc.core
 
 import Decorators.*
 import Contexts.*
@@ -192,6 +190,7 @@ object TH:
 extension (th: TH)
   def toInt: Int = th
 
+
 final case class Knowledge private(
   // TODO: If adding fields, remember to updade merge if needed
   private val unionFind: UnionFind,
@@ -205,7 +204,8 @@ final case class Knowledge private(
   private val revTypeVarReprs: mutable.Map[TypeVar, ECH],
   private val ext2int: mutable.Map[TypeVar, TypeVar],
   private val int2ext: mutable.Map[TypeVar, TypeVar],
-  private val symsEC: mutable.Map[Symbol, ECH]):
+  private val symsEC: mutable.Map[Symbol, ECH],
+  private var origCstrt: OrderingConstraint):
 
   def this() = this(
     new UnionFind,
@@ -219,7 +219,8 @@ final case class Knowledge private(
     mutable.Map.empty,
     mutable.Map.empty,
     mutable.Map.empty,
-    mutable.Map.empty)
+    mutable.Map.empty,
+    OrderingConstraint.empty)
 
   def fresh: Knowledge =
     val res = new Knowledge(
@@ -234,7 +235,8 @@ final case class Knowledge private(
       revTypeVarReprs.clone,
       ext2int.clone,
       int2ext.clone,
-      symsEC.clone)
+      symsEC.clone,
+      origCstrt)
     assert(res == this)
     res
 
@@ -366,6 +368,7 @@ final case class Knowledge private(
     - Voir là où il y a besoin de faire des unionFind.find d'ec
     - Cette histoire de restore/fresh etc.
         - ça à l'air ""OK""
+          - En fait non
     - Pas déterministe --'
     - Meilleur logging, là c'est un peu le bazard
     - Des assertions d'invariants
@@ -373,6 +376,12 @@ final case class Knowledge private(
     - Les TypeParamRef ne sont pas forcément des param qui sont bound à un outer scope!!!
       - C'est souvent utilisé un peu comme des tyvars (voir Constraint et les TypeLambda)
     - refn et path-dependant types
+    - La manière d'intégrer les connaissances précedentes ("origCstrt") est immonde.
+      - Le resType du PolyType est un MethodType, voir ce que cela implique
+    - Dealias à faire...
+    - TypeVar instantiation; il faut s'assurer qu'on couvre tous les cas (TFindOrCreate)
+    - def approximation
+    - restore AGAIN
     -
     - Voir la différence entre GadtCstr et OrdCstrts dans isSubtype
     - Check false plus poussé: par example, si Int et String sont dans la même EC, il y a contradiction
@@ -391,7 +400,7 @@ final case class Knowledge private(
 //    if extTyVars.nonEmpty then
 //      println(extTyVars.map(_.show).mkString(", "))
 
-    val cstrt0 = revTypeVarReprs.keys.foldLeft(OrderingConstraint.empty) {
+    val cstrt0 = revTypeVarReprs.keys.foldLeft(origCstrt) {
       case (cstrt, tv) =>
         cstrt.add(tv.origin.binder, List(tv))
     }
@@ -440,37 +449,41 @@ final case class Knowledge private(
           case _ => false
         })
       // TODO: This is quite fragile. Find another way of doing that!!!!
-      .orElse(pending.get(ec))
       .getOrElse {
-        // TODO: Correct use of RecType??? Because we may have multiple RecTypes for the same EC!!!
-        RecType.closeOver(rec => externalizeType(storedTypes(members(ec).head), pending + (ec -> rec)))
+        externalizeType(storedTypes(members(ec).head), pending)
       }
     res
 
   def externalizeType(ty: Type, pending: Map[ECH, RecType])(using Context): Type =
+
+    def forDebugging(tp: Type, mapOver: Type => Type): Type =
+      if !tp.exists then
+        return NoType
+      tp match
+        // case ECTypeVar(otherEC0) =>
+        case tv: TypeVar if revTypeVarReprs.get(tv).orElse(ext2int.get(tv).map(revTypeVarReprs)).isDefined =>
+          val otherEC0 = revTypeVarReprs.get(tv).orElse(ext2int.get(tv).map(revTypeVarReprs)).get
+          val otherEC = unionFind.find(otherEC0)
+          // TODO: If we appear in an injective position and that we have a cycle, occur checks fails, so the GADT pattern is unreachable.
+          //  This would be an interesting improvement.
+          val pend = pending.get(otherEC)
+          pend.getOrElse {
+            // TODO: Correct use of RecType??? Because we may have multiple RecTypes for the same EC!!!
+            val res = RecType.closeOver(rec => {
+              val ext = externalizeEC(otherEC, pending + (otherEC -> rec))
+              ext
+            })
+            res
+          }
+        case _ =>
+          mapOver(tp)
+
     val tm = new TypeMap {
-      override def apply(tp: Type): Type =
-        if !tp.exists then
-          return NoType
-        tp match
-          case ECTypeVar(otherEC0) =>
-            val otherEC = unionFind.find(otherEC0)
-            // TODO: If we appear in an injective position and that we have a cycle, occur checks fails, so the GADT pattern is unreachable.
-            //  This would be an interesting improvement.
-            pending.get(otherEC).getOrElse {
-              // TODO: Correct use of RecType??? Because we may have multiple RecTypes for the same EC!!!
-              RecType.closeOver(rec => externalizeEC(otherEC, pending + (otherEC -> rec)))
-            }
-          case _ =>
-            mapOver(tp)
+      override def apply(tp: Type): Type = forDebugging(tp, mapOver)
     }
     tm(ty)
 
   // TODO: Explain.
-  // TODO: What about tyvar that are already instanciated?????
-  // TODO: What about tyvar that are already instanciated?????
-  // TODO: What about tyvar that are already instanciated?????
-  // TODO: This can do pretty stupid things, such as A >: A <: A or A >: a <: a even though we could say A := a
   def asExternalizedConstraint(using ctx: Context): Constraint =
     // All representatives EC handles
     val orderedECs = members.keys.toVector
@@ -483,9 +496,10 @@ final case class Knowledge private(
     println(debugString)
     println("EXT TYVARS " + allExtTyVarsOfECs.values.flatten.map(_.show).mkString(", "))
 
-    val cstrt0 = allExtTyVarsOfECs.values.flatten.foldLeft(OrderingConstraint.empty) {
+    val cstrt0 = allExtTyVarsOfECs.values.flatten.foldLeft(origCstrt) {
       case (cstrt, tv) =>
-        cstrt.add(tv.origin.binder, List(tv))
+        if origCstrt.contains(tv.origin.binder) then cstrt
+        else cstrt.add(tv.origin.binder, List(tv))
     }
 
     val cstrt1 = members.keys.foldLeft(cstrt0) {
@@ -552,29 +566,12 @@ final case class Knowledge private(
     }
     cstrt2
 
-    /*
-    val cstrt1 = members.foldLeft(cstrt0) {
-      case (cstrt, (ec, membsTH)) =>
-        // TODO: Flawed; because the cstrt2 thing will then fail!!
-        if externalTyVars.contains(typeVarReprs(ec)) then
-          dets.get(ec) match
-            case Some(detTH) =>
-              // TODO: Not so fast!!! We must externalize the type variables as well!!!!
-              cstrt.updateEntry(typeVarReprs(ec).origin, storedTypes(detTH))
-            case None =>
-              cstrt.updateEntry(typeVarReprs(ec).origin, bounds(ec, inclusive = true))
-        else
-          cstrt
-    }
-    */
-
   def constraintPatternType(pat: Type, scrut: Type)(using ctx: Context): Boolean =
-    val cstrts = createConstraints(pat, scrut) ++ breakConstraint(ctx.typerState.constraint)
+    origCstrt = ctx.typerState.constraint.asInstanceOf[OrderingConstraint]
+    val cstrts = createConstraints(pat, scrut) ++ breakConstraint(origCstrt)
     println(i"Constraint for $scrut matches $pat:")
     println("  " ++ cstrts.map((s, t) => i"$s <: $t").mkString(", "))
     val res = simplifyLoop(cstrts)
-//    println("DONE")
-//    println(debugString)
     res
 
   def findECForSym(sym: Symbol)(using ctx: Context): Option[(ECH, TypeVar)] =
