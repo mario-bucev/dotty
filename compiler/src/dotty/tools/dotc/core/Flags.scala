@@ -3,7 +3,10 @@ package core
 
 object Flags {
 
+
   object opaques {
+
+
 
     /** A FlagSet represents a set of flags. Flags are encoded as follows:
     *  The first two bits indicate whether a flag set applies to terms,

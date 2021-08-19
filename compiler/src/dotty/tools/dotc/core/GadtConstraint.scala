@@ -54,6 +54,8 @@ sealed abstract class GadtConstraint extends Showable {
   /** Restore the state from other [[GadtConstraint]], probably copied using [[fresh]] */
   def restore(other: GadtConstraint): Unit
 
+  def asConstraint(using Context): Constraint = OrderingConstraint.empty
+
   def debugBoundsDescription(using Context): String
 
   def constraintPatternType(pat: Type, scrut: Type)(using Context): Boolean
@@ -75,6 +77,8 @@ final class ProperGadtConstraint private(
     val res = op
     working = false
     res
+
+  override def asConstraint(using Context): Constraint = knowledge.asConstraint
 
   /** Exposes ConstraintHandling.subsumes */
   def subsumes(left: GadtConstraint, right: GadtConstraint, pre: GadtConstraint)(using Context): Boolean = {
@@ -129,9 +133,24 @@ final class ProperGadtConstraint private(
     knowledge.findECForSym(sym).isDefined
 
   override def approximation(sym: Symbol, fromBelow: Boolean)(using Context): Type = {
+    val bnds = knowledge.boundsForSym(sym)
+    val res = if bnds.lo eq bnds.hi then
+      bnds.lo
+    else
+      // TODO: Et pour les F-bounded types??? si fromBelow est false mais que typaramref de sym apparait dans hi, il faut faire lo!!!
+      // TODO: Est-ce vraiment correct???
+      // TODO: Il faudrait utiliser | et & ???
+      if fromBelow then bnds.lo
+      else bnds.hi
+
+    println(i"Approx $sym ~> $res")
+    res
+    /*
     val param = knowledge.findECForSym(sym).get._2.origin
     // TODO: Why can we refer to internal tyvars??? The original impl. does not externalize anything
     val cstrt = knowledge.asConstraint
+    println("KNWLEDGE:")
+    println(knowledge.debugString)
     // TODO: Copy/paste from ConstraintHandling...
     // TODO: Copy/paste from ConstraintHandling...
     // TODO: Copy/paste from ConstraintHandling...
@@ -144,7 +163,7 @@ final class ProperGadtConstraint private(
     def fullUpperBound(param: TypeParamRef): Type =
       cstrt.minUpper(param).foldLeft(nonParamBounds(param).hi)(_ & _)
 
-    cstrt.entry(param) match
+    val res = cstrt.entry(param) match
       case entry: TypeBounds =>
         val useLowerBound = fromBelow || param.occursIn(entry.hi)
         val inst = if useLowerBound then fullLowerBound(param) else fullUpperBound(param)
@@ -152,6 +171,9 @@ final class ProperGadtConstraint private(
       case inst =>
         assert(inst.exists)
         inst
+    println(i"Approx $sym ~> $res")
+    res
+    */
   }
 
   override def fresh: GadtConstraint =

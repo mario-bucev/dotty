@@ -81,12 +81,16 @@ trait PatternTypeConstrainer { self: TypeComparer =>
     println(i"$scrut")
     println(ctx.typerState.constraint.show)
     println(ctx.gadt.debugBoundsDescription)
+    val previous = ctx.gadt.fresh
     val res = ctx.gadt.constraintPatternType(pat, scrut)
     println(i"Got: $res")
     println(ctx.gadt.debugBoundsDescription)
+    // val tmp = ctx.gadt.asConstraint
     println("====================================")
     println("====================================")
     println("====================================\n")
+    if !res then
+      ctx.gadt.restore(previous)
     return res
 
     def classesMayBeCompatible: Boolean = {

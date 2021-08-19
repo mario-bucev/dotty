@@ -18,6 +18,9 @@ object GadtUtils:
 
   type BoundsInfo = List[(Variance, TypeParamRef, TypeBounds)]
 
+  def cartesian[A, B](as: Set[A], bs: Set[B]): Set[(A, B)] =
+    as.flatMap(a => bs.map(b => (a, b)))
+
   def isSubtypeInFrozenConstraint(s: Type, t: Type, cstrt: Constraint)(using ctx: Context): Boolean =
     // TODO: Not sure if we are supposed to do that...
     val savedCstrt = ctx.typerState.constraint
