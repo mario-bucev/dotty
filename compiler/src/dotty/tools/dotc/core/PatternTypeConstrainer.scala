@@ -85,7 +85,7 @@ trait PatternTypeConstrainer { self: TypeComparer =>
     val res = ctx.gadt.constraintPatternType(pat, scrut)
     println(i"Got: $res")
     println(ctx.gadt.debugBoundsDescription)
-    // val tmp = ctx.gadt.asConstraint
+    val tmp = ctx.gadt.asConstraint
     println("====================================")
     println("====================================")
     println("====================================\n")

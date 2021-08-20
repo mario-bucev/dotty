@@ -78,7 +78,7 @@ final class ProperGadtConstraint private(
     working = false
     res
 
-  override def asConstraint(using Context): Constraint = knowledge.asConstraint
+  override def asConstraint(using Context): Constraint = knowledge.asExternalizedConstraint
 
   /** Exposes ConstraintHandling.subsumes */
   def subsumes(left: GadtConstraint, right: GadtConstraint, pre: GadtConstraint)(using Context): Boolean = {
@@ -138,12 +138,14 @@ final class ProperGadtConstraint private(
       bnds.lo
     else
       // TODO: Et pour les F-bounded types??? si fromBelow est false mais que typaramref de sym apparait dans hi, il faut faire lo!!!
+      // TODO: Et pour les F-bounded types??? si fromBelow est false mais que typaramref de sym apparait dans hi, il faut faire lo!!!
+      // TODO: Et pour les F-bounded types??? si fromBelow est false mais que typaramref de sym apparait dans hi, il faut faire lo!!!
       // TODO: Est-ce vraiment correct???
       // TODO: Il faudrait utiliser | et & ???
       if fromBelow then bnds.lo
       else bnds.hi
 
-    println(i"Approx $sym ~> $res")
+//    println(i"Approx $sym ~> $res")
     res
     /*
     val param = knowledge.findECForSym(sym).get._2.origin

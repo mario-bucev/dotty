@@ -105,7 +105,7 @@ object GadtUtils:
       hk => map(hk)(t))
 
   def etaExpandIfNeeded(t: Type)(using Context): Type =
-    if t.hasSimpleKind then t
+    if t.hasSimpleKind || t.hasAnyKind then t
     else
       // TODO: ...
       val expanded = t.EtaExpand(t.typeParams).asInstanceOf[HKTypeLambda]
@@ -182,8 +182,10 @@ object GadtUtils:
       }
 
   def topOfKind(targetKind: Type)(using Context): Type =
-    assert(!targetKind.isAnyKind)
-    if targetKind.hasSimpleKind then
+    // TODO: What should we do with AnyKind?
+    if targetKind.hasAnyKind then
+      defn.AnyKindType
+    else if targetKind.hasSimpleKind then
       defn.AnyType
     else
       assert(targetKind.hkResult != NoType)
