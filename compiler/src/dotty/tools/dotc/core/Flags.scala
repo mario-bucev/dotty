@@ -4,9 +4,9 @@ package core
 object Flags {
 
 
+
+
   object opaques {
-
-
 
     /** A FlagSet represents a set of flags. Flags are encoded as follows:
     *  The first two bits indicate whether a flag set applies to terms,
@@ -259,6 +259,7 @@ object Flags {
 
   /** A value or class implementing a module */
   val (Module @ _, ModuleVal @ _, ModuleClass @ _) = newFlags(15, "module")
+
 
    /** A value or class representing a package */
   val (Package @ _, PackageVal @ _, PackageClass @ _) = newFlags(16, "<package>")

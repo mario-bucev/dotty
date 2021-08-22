@@ -21,6 +21,11 @@ object GadtUtils:
   def cartesian[A, B](as: Set[A], bs: Set[B]): Set[(A, B)] =
     as.flatMap(a => bs.map(b => (a, b)))
 
+  def fromAnds(t: Type): List[Type] =
+    t match
+      case AndType(t1, t2) => fromAnds(t1) ++ fromAnds(t2)
+      case t => List(t)
+
   def isSubtypeInFrozenConstraint(s: Type, t: Type, cstrt: Constraint)(using ctx: Context): Boolean =
     // TODO: Not sure if we are supposed to do that...
     val savedCstrt = ctx.typerState.constraint
@@ -145,9 +150,10 @@ object GadtUtils:
           case _ => acc
     }
 
-  // TODO: What does a "Nil" implies?
+  // empty results: child does not extend parentClsSym
   def upcastTo(child: ClassSymbol, args: List[Type], parentClsSym: ClassSymbol)(using Context): (List[Type], Set[(Type, Type)]) =
-    assert(child.classDenot.derivesFrom(parentClsSym))
+    if !child.classDenot.derivesFrom(parentClsSym) then
+      return (Nil, Set.empty)
     val parentTypeRef = parentClsSym.classDenot.typeRef
 
     def helper(candidate: Type): (List[Type], Set[(Type, Type)]) =

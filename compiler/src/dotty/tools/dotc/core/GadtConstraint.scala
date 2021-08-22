@@ -109,12 +109,15 @@ final class ProperGadtConstraint private(
   }
 
   override def isLess(sym1: Symbol, sym2: Symbol)(using Context): Boolean = performWork {
+//    println("IS LESS")
     knowledge.isLess(sym1, sym2)
   }
 
   override def fullBounds(sym: Symbol)(using ctx: Context): TypeBounds = performWork {
     // TODO: ???
-    val res = knowledge.boundsForSym(sym)
+    val res = knowledge.boundsForSym(sym, true)
+//    if res != null then
+//      println(i"Full Bounds for $sym:    $res")
     res
   }
 
@@ -125,7 +128,9 @@ final class ProperGadtConstraint private(
       .map((ec, _) => knowledge.bounds(ec, inclusive = true))
       .getOrElse(null)
     */
-    val res = knowledge.boundsForSym(sym)
+    val res = knowledge.boundsForSym(sym, false)
+//    if res != null then
+//      println(i"Bounds for $sym:    $res")
     res
   }
 
@@ -133,7 +138,7 @@ final class ProperGadtConstraint private(
     knowledge.findECForSym(sym).isDefined
 
   override def approximation(sym: Symbol, fromBelow: Boolean)(using Context): Type = {
-    val bnds = knowledge.boundsForSym(sym)
+    val bnds = knowledge.boundsForSym(sym, true)
     val res = if bnds.lo eq bnds.hi then
       bnds.lo
     else
@@ -145,7 +150,8 @@ final class ProperGadtConstraint private(
       if fromBelow then bnds.lo
       else bnds.hi
 
-//    println(i"Approx $sym ~> $res")
+    println(i"Approx (fromBelow = $fromBelow)  $sym ~> $res   (obtained bounds $bnds)")
+    println(debugBoundsDescription)
     res
     /*
     val param = knowledge.findECForSym(sym).get._2.origin

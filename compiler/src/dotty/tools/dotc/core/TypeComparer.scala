@@ -231,6 +231,8 @@ class TypeComparer(@constructorOnly initctx: Context) extends ConstraintHandling
         //if (ctx.settings.YnoDeepSubtypes.value) {
         //  new Error("deep subtype").printStackTrace()
         //}
+//        println(ctx.gadt.debugBoundsDescription)
+//        assert(false)
         assert(!ctx.settings.YnoDeepSubtypes.value)
         if (Config.traceDeepSubTypeRecursions && !this.isInstanceOf[ExplainingTypeComparer])
           report.log(explained(_.isSubType(tp1, tp2, approx)))
