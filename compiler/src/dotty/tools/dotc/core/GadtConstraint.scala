@@ -59,6 +59,8 @@ sealed abstract class GadtConstraint extends Showable {
   def debugBoundsDescription(using Context): String
 
   def constraintPatternType(pat: Type, scrut: Type)(using Context): Boolean
+
+  def isWorking: Boolean = false
 }
 
 final class ProperGadtConstraint private(
@@ -72,16 +74,20 @@ final class ProperGadtConstraint private(
     working = false
   )
 
+  override def isWorking: Boolean = working
+
   inline private def performWork[T](inline op: => T): T =
     working = true
     val res = op
     working = false
     res
 
-  override def asConstraint(using Context): Constraint = knowledge.asExternalizedConstraint
+  override def asConstraint(using Context): Constraint = performWork {
+    knowledge.asExternalizedConstraint
+  }
 
   /** Exposes ConstraintHandling.subsumes */
-  def subsumes(left: GadtConstraint, right: GadtConstraint, pre: GadtConstraint)(using Context): Boolean = {
+  def subsumes(left: GadtConstraint, right: GadtConstraint, pre: GadtConstraint)(using Context): Boolean = performWork {
 //    def extractConstraint(g: GadtConstraint) = g match {
 //      case s: ProperGadtConstraint => s.constraint
 //      case EmptyGadtConstraint => OrderingConstraint.empty
@@ -89,7 +95,9 @@ final class ProperGadtConstraint private(
 //    subsumes(extractConstraint(left), extractConstraint(right), extractConstraint(pre))
 
     // TODO: there is a restore in necessaryEither that we can't avoid because symbols keep getting added ?
-    false
+    println("SUBSUMES CALLED")
+//    false
+    ???
   }
 
   override def constraintPatternType(pat: Type, scrut: Type)(using ctx: Context): Boolean = performWork {
@@ -109,15 +117,19 @@ final class ProperGadtConstraint private(
   }
 
   override def isLess(sym1: Symbol, sym2: Symbol)(using Context): Boolean = performWork {
-//    println("IS LESS")
-    knowledge.isLess(sym1, sym2)
+    println(i"IS $sym1 <: $sym2 ?")
+    val res = knowledge.isLess(sym1, sym2)
+    println(s" --> $res")
+    res
   }
 
   override def fullBounds(sym: Symbol)(using ctx: Context): TypeBounds = performWork {
     // TODO: ???
     val res = knowledge.boundsForSym(sym, true)
-//    if res != null then
-//      println(i"Full Bounds for $sym:    $res")
+    if res != null then
+      println(i"Full Bounds for $sym:    $res")
+    else
+      println(i"Full bounds null for $sym")
     res
   }
 
@@ -134,10 +146,14 @@ final class ProperGadtConstraint private(
     res
   }
 
-  override def contains(sym: Symbol)(using Context): Boolean =
-    knowledge.findECForSym(sym).isDefined
+  override def contains(sym: Symbol)(using Context): Boolean = performWork {
+    val res = knowledge.findECForSym(sym).isDefined
+//    println(s"CONTAINS $sym ?  $res")
+//    println(knowledge.symsEC)
+    res
+  }
 
-  override def approximation(sym: Symbol, fromBelow: Boolean)(using Context): Type = {
+  override def approximation(sym: Symbol, fromBelow: Boolean)(using Context): Type = performWork {
     val bnds = knowledge.boundsForSym(sym, true)
     val res = if bnds.lo eq bnds.hi then
       bnds.lo
@@ -151,7 +167,7 @@ final class ProperGadtConstraint private(
       else bnds.hi
 
     println(i"Approx (fromBelow = $fromBelow)  $sym ~> $res   (obtained bounds $bnds)")
-    println(debugBoundsDescription)
+//    println(debugBoundsDescription)
     res
     /*
     val param = knowledge.findECForSym(sym).get._2.origin
@@ -186,13 +202,16 @@ final class ProperGadtConstraint private(
 
   override def fresh: GadtConstraint =
     assert(!working)
+//    println("FRESH GADT")
     new ProperGadtConstraint(knowledge.fresh, working = false)
 
   def restore(other: GadtConstraint): Unit =
     assert(!working)
+//    println("RESTORE GADT")
     other match {
       case other: ProperGadtConstraint =>
         this.knowledge = other.knowledge
+        this.working = other.working
       case _ =>
     }
 
@@ -268,7 +287,7 @@ final class ProperGadtConstraint private(
 
   override def toText(printer: Printer): Texts.Text = ???
 
-  override def debugBoundsDescription(using Context): String = {
+  override def debugBoundsDescription(using Context): String = performWork {
 //    val sb = new mutable.StringBuilder
 //    sb ++= constraint.show
 //    sb += '\n'

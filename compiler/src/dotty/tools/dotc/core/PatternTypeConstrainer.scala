@@ -77,6 +77,8 @@ trait PatternTypeConstrainer { self: TypeComparer =>
     println("====================================")
     println("=========CONSTRAINT  PATMAT=========")
     println("====================================")
+    val patStr = i"$pat"
+    val scrutStr = i"$scrut"
     println(i"$pat")
     println(i"$scrut")
     println(ctx.typerState.constraint.show)

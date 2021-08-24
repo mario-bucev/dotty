@@ -38,7 +38,6 @@ trait ConstraintHandling {
 
   /** If the constraint is frozen we cannot add new bounds to the constraint. */
   protected var frozenConstraint: Boolean = false
-  protected var gadtInference: Boolean = false
 
   /** Potentially a type lambda that is still instantiatable, even though the constraint
    *  is generally frozen.

@@ -206,7 +206,7 @@ final case class Knowledge private(
   private val revTypeVarReprs: mutable.Map[TypeVar, ECH],
   private val ext2int: mutable.Map[TypeVar, TypeVar],
   private val int2ext: mutable.Map[TypeVar, TypeVar],
-  private val symsEC: mutable.Map[Symbol, ECH],
+  val symsEC: mutable.Map[Symbol, ECH],
   private var origCstrt: OrderingConstraint):
 
   def this() = this(
@@ -443,6 +443,7 @@ final case class Knowledge private(
     - Voir cette histoire de skolem
       - En fait, c'est en raison de 1 <: Int...
     - "quoted patterns": ???
+    - instantiated external type var: il faudrait faire un merge (voir 2002-07) ?
     -
     - Voir la différence entre GadtCstr et OrdCstrts dans isSubtype
     - Check false plus poussé: par example, si Int et String sont dans la même EC, il y a contradiction
@@ -514,11 +515,12 @@ final case class Knowledge private(
     val ec = unionFind.find(ec0)
     val res = dets.get(ec).map(detTH => externalizeType(storedTypes(detTH), pending))
       .orElse(externalTyVarsOfEC(ec).headOption)
-      // TODO: Externalize with symbols as well?
+      // TODO: Externalize with symbols as well? Note that this can interfere with boundsForSym...
+      .orElse(symsEC.find((_, cand) => cand == ec).map(_._1.typeRef))
       .orElse(
         // TODO: This is quite fragile. Find another way of doing that!!!!
         members(ec).map(storedTypes).find {
-          case nt: NamedType => true
+          case _: NamedType => true
           case _ => false
         })
       // TODO: This is quite fragile. Find another way of doing that!!!!
@@ -597,22 +599,26 @@ final case class Knowledge private(
         case TypeBounds(lo, hi) if lo == hi => lo
         case otherwise => otherwise
 
-
     // ---------------------------------
 
-//    println("AS EXTERNALIZED:")
-//    println(debugString)
-//    println("EXT TYVARS " + allExtTyVarsOfECs.values.flatten.map(_.show).mkString(", "))
-
-    val cstrt0 = allExtTyVarsOfECs.values.flatten.foldLeft(origCstrt) {
+    // TODO: "origCstrt": bad idea, things may change in between !!!
+    val curr = ctx.typerState.constraint.asInstanceOf[OrderingConstraint]
+    val cstrt0 = allExtTyVarsOfECs.values.flatten.foldLeft(curr) {
       case (cstrt, tv) =>
-        if cstrt.contains(tv.origin.binder) then cstrt
-        else cstrt.add(tv.origin.binder, List(tv))
+        // TODO: Sort things out with instantiated tyvars: basically, if we don't filter them out,
+        //    we have problems with constraint state not being empty at the end of typer...
+        // TODO: It seems that this step is unnecessary because curr should contain all ext. TVs ?
+        if cstrt.contains(tv.origin.binder) || tv.isInstantiated then
+          cstrt
+        else
+          cstrt.add(tv.origin.binder, List(tv))
     }
 
     val cstrt1 = members.keys.foldLeft(cstrt0) {
       case (cstrt, ec) =>
-        val extTyVars = allExtTyVarsOfECs(ec)
+        // TODO: Sort things out with instantiated tyvars: basically, if we don't filter them out,
+        //    we have problems with constraint state not being empty at the end of typer...
+        val extTyVars = allExtTyVarsOfECs(ec).filterNot(_.isInstantiated)
         if extTyVars.isEmpty then
           // This EC does not have an associated external type variable, as such, we cannot represent it.
           cstrt
@@ -663,7 +669,7 @@ final case class Knowledge private(
 
   def addSymbols(syms: List[Symbol])(using Context): Boolean =
     println(i"KNOWLEDGE: ADD ${syms.map(s => i"$s >: ${s.info.bounds.lo} <: ${s.info.bounds.hi}").mkString(", ")}")
-    println(debugString)
+//    println(debugString)
     val (ecs, tvars) = syms.map(findOrCreateECForSym).unzip
 
     val res = syms.zip(tvars).forall {
@@ -677,9 +683,9 @@ final case class Knowledge private(
           val hi = tb.hi.subst(syms, tvars)
           simplifyLoop(Set((lo, symTyVar), (symTyVar, hi)))
     }
-    println("ADDED THE SYMBOLS")
+    println(s"ADDED THE SYMBOLS: $res")
     println(debugString)
-    println("======================")
+//    println("======================")
     res
 
   def addBound(sym: Symbol, bound: Type, isUpper: Boolean)(using Context): Boolean =
@@ -708,10 +714,10 @@ final case class Knowledge private(
     val cstrtsStack = mutable.Stack.from(cstrts)
     while cstrtsStack.nonEmpty do
       val (s, t) = cstrtsStack.pop()
-      println(i"DEDUCTION FOR $s <: $t")
+//      println(i"DEDUCTION FOR $s <: $t")
       deductionIneq(s, t) match
         case Some(deductions) =>
-          println("--> We have: " + deductions.map((a, b) => i"$a <: $b").mkString(", "))
+//          println("--> We have: " + deductions.map((a, b) => i"$a <: $b").mkString(", "))
 //          println("---------------------\n")
           val newCsrtrts = deductions.foldLeft(Set.empty[(Type, Type)]) {
             case (acc, (u, v)) => acc ++ compact(u, v)
@@ -801,35 +807,20 @@ final case class Knowledge private(
         return Set((pat0Dealias, scrut0Dealias))
       case tyconPat: TypeRef if tyconPat.symbol.isClass && (/*tyconPat.symbol.is(Final)|| */tyconPat.symbol.is(Case)) =>
         return Set((pat0Dealias, scrut0Dealias))
-      case tr: TermRef if tr.symbol.is(CaseVal) =>
+      // TODO: Does this properly cover object within enum and "object module"?
+      case tr: TermRef if (tr.symbol.is(CaseVal) || tr.symbol.is(Final)) =>
         return Set((pat0Dealias, scrut0Dealias))
       case _ => ()
+//    pat0Dealias match
+//      case tr: TermRef =>
+//        println(i"  for $pat0Dealias, we have flags = ${tr.symbol.flagsString}")
+//      case _ => ()
 
     // TODO: dealias + strip ok?
     // TODO: What if we have something like TermRef & TermRef for pat or scrut ???
     // TODO: This is really messy, we should have a thing dedicated to term constraints
     val pat = stripTermRefAndExprType(pat0Dealias)
     val scrut = stripTermRefAndExprType(scrut0Dealias)
-    /*
-    // TODO: dealias + strip ok?
-    // TODO: What if we have something like TermRef & TermRef for pat or scrut ???
-    // TODO: This is really messy, we should have a thing dedicated to term constraints
-    val pat = stripTermRefAndExprType(pat0.dealias)
-    val scrut = stripTermRefAndExprType(scrut0.dealias)
-    println(pat0)
-    println(pat)
-//    println(i"createConstraints for $pat0 and $scrut0")
-//    println(i"   (dealias + stripped: $pat and $scrut)")
-
-    // TODO: No, Int is final but there are singleton types (constants) that are its subtypes, so this thing below does not apply!!!
-    // If the pattern is a final class, we generate the stronger constraint pat <: scrut
-    pat match
-      case AppliedType(tyconPat: TypeRef, _) if tyconPat.symbol.isClass && (tyconPat.symbol.is(Final) || tyconPat.symbol.is(Case)) =>
-        return Set((pat, scrut))
-      case tyconPat: TypeRef if tyconPat.symbol.isClass && (tyconPat.symbol.is(Final)|| tyconPat.symbol.is(Case)) =>
-        return Set((pat, scrut))
-      case _ => ()
-    */
 
     val intersectDNF = disjunctions(pat & scrut)
     val inCommon = commonTypes(intersectDNF)
@@ -887,7 +878,8 @@ final case class Knowledge private(
       // TODO: Refinement things
 
       // TODO: Difference between isAny and isAnyRef?
-      case (s, t) if s.isNothingType || t.isAny || s == t =>
+      // TODO: Properly deal with this AnyKind thing
+      case (s, t) if s.isNothingType || t.isAny || s == t || t.isAnyKind =>
         Some(Set.empty)
 
       // TODO: check this
@@ -1085,13 +1077,13 @@ final case class Knowledge private(
 //      case _ => Some(Set.empty)
 
   def compact(s: Type, t: Type)(using ctx: Context): Set[(Type, Type)] =
-    val msg = i"COMPACT $s <: $t"
-    println(msg)
-    println(debugString)
+//    val msg = i"COMPACT $s <: $t"
+//    println(msg)
+//    println(debugString)
     val (sEC, sTyVar) = TFindOrCreateEC(s)
-    println(i"EC for $s is [$sEC] (with tyvar $sTyVar)")
+//    println(i"EC for $s is [$sEC] (with tyvar $sTyVar)")
     val (tEC, tTyVar) = TFindOrCreateEC(t)
-    println(i"EC for $t is [$tEC] (with tyvar $tTyVar)")
+//    println(i"EC for $t is [$tEC] (with tyvar $tTyVar)")
 
     addIneq(sEC, tEC) match
       case Left(()) =>
@@ -1187,8 +1179,8 @@ final case class Knowledge private(
 
     ///////////////////////////////////////
 
-    println(s"MERGING $a WITH $b")
-    println(debugString)
+//    println(s"MERGING $a WITH $b")
+//    println(debugString)
 
     val allCsrts = mutable.Set.empty[(Type, Type)]
     val allToMerge = mutable.Set.empty[(ECH, ECH)]
@@ -1210,14 +1202,6 @@ final case class Knowledge private(
             allCsrts ++= ineqConstraints(a, b)
             allCsrts ++= ineqConstraints(b, a)
             gSub.addIneq(a, b)
-//            addIneq(a, b) match
-//              case Right(cstrts) =>
-//                allCsrts ++= cstrts
-//                allCsrts ++ ineqConstraints(b, a)
-//              case Left(()) => assert(false)
-    //    println(s"DET STATUS: ${(dets.contains(a), dets.contains(b))}")
-    //    println(debugString)
-    //    println(typeVarReprs)
 
     (dets.contains(a), dets.contains(b)) match
       case (true, true) =>
@@ -2036,12 +2020,12 @@ final case class Knowledge private(
           val membsSorted = membs.toSeq.sortBy(_.toInt)
           val tys = membsSorted.map(th => storedTypes(th).toText(printer).show).mkString(", ")
           val tyVars = allInternalTyVarsOf(ec)
-          val extTyVars = tyVars.flatMap(int2ext.get).map(_.toText(printer).show).mkString(", ")
+          val extTyVars = tyVars.flatMap(int2ext.get).map(_.toString).mkString(", ")
           val symbols = symsEC.filter((_, candEC) => candEC == ec).map(_._1.toText(printer).show).mkString(", ")
 
           acc :+
             s"""$ec: {$tys} (THs: {${membsSorted.mkString(",")}}, """ ++
-            s"""internal tvs: {${tyVars.map(_.show).mkString(", ")}}, """ ++
+            s"""internal tvs: {${tyVars.map(_.toString).mkString(", ")}}, """ ++
             s"""ext tvs: {$extTyVars}, symbols: {$symbols})"""
       }.mkString("\n")
 

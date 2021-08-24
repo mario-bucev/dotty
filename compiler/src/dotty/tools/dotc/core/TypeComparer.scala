@@ -232,7 +232,7 @@ class TypeComparer(@constructorOnly initctx: Context) extends ConstraintHandling
         //  new Error("deep subtype").printStackTrace()
         //}
 //        println(ctx.gadt.debugBoundsDescription)
-//        assert(false)
+        assert(false)
         assert(!ctx.settings.YnoDeepSubtypes.value)
         if (Config.traceDeepSubTypeRecursions && !this.isInstanceOf[ExplainingTypeComparer])
           report.log(explained(_.isSubType(tp1, tp2, approx)))
@@ -627,7 +627,7 @@ class TypeComparer(@constructorOnly initctx: Context) extends ConstraintHandling
             * Note: it would be nice if this could trigger a migration warning, but I
             * am not sure how, since the code is buried so deep in subtyping logic.
             */
-            val boundsOK =
+            def boundsOK =
               migrateTo3 ||
               tp1.typeParams.corresponds(tp2.typeParams)((tparam1, tparam2) =>
                 isSubType(tparam2.paramInfo.subst(tp2, tp1), tparam1.paramInfo))
@@ -1211,9 +1211,8 @@ class TypeComparer(@constructorOnly initctx: Context) extends ConstraintHandling
             case _ =>
               false
           }
-          val theBounds = bounds(param1).hi.applyIfParameterized(args1)
           canConstrain(param1) && canInstantiate ||
-            isSubType(theBounds, tp2, approx.addLow)
+            isSubType(bounds(param1).hi.applyIfParameterized(args1), tp2, approx.addLow)
         case tycon1: TypeRef =>
           val sym = tycon1.symbol
           !sym.isClass && {
@@ -1288,15 +1287,16 @@ class TypeComparer(@constructorOnly initctx: Context) extends ConstraintHandling
     else if tp1 eq tp2 then true
     else
       val saved = constraint
-//      val savedGadt =
-//        if !gadtInference then ctx.gadt.fresh
+      // TODO: Sort these things
+      val savedGadt = null
+//        if !ctx.gadt.isWorking then ctx.gadt.fresh
 //        else null
 
       inline def restore() =
         state.constraint = saved
         // TODO: on veut pas restore un gadt si on est pas en frozen gadt
         //    Il faudrait employer un autre flag, parce que là c'est vraiment pas terrible...
-//        if !gadtInference then
+//        if !ctx.gadt.isWorking then
 //          ctx.gadt.restore(savedGadt)
 
       val savedSuccessCount = successCount
@@ -1693,12 +1693,16 @@ class TypeComparer(@constructorOnly initctx: Context) extends ConstraintHandling
    *  subtyping relationships.
    */
   private def necessaryEither(op1: => Boolean, op2: => Boolean): Boolean =
-    if true || gadtInference then
+    if ctx.gadt.isWorking then
       return op1 && op2
+//    else
+//      println("!!!!! NECESSARY EITHER GADT !ISWORKING")
+//      return op1 && op2
     val preConstraint = constraint
     val preGadt = ctx.gadt.fresh
     def allSubsumes(leftGadt: GadtConstraint, rightGadt: GadtConstraint, left: Constraint, right: Constraint): Boolean =
       // TODO
+      println("ALL SUBSUMES NOT IMPLEMENTED; RETURNING FALSE")
       false
 //      subsumes(left, right, preConstraint) && preGadt.match
 //        case preGadt: ProperGadtConstraint =>
@@ -1981,10 +1985,7 @@ class TypeComparer(@constructorOnly initctx: Context) extends ConstraintHandling
   def isSameType(tp1: Type, tp2: Type): Boolean =
     if (tp1 eq NoType) false
     else if (tp1 eq tp2) true
-    else
-      val r1 = isSubType(tp1, tp2)
-      val r2 = isSubType(tp2, tp1)
-      r1 && r2
+    else isSubType(tp1, tp2) && isSubType(tp2, tp1)
 
   override protected def isSame(tp1: Type, tp2: Type)(using Context): Boolean = isSameType(tp1, tp2)
 
