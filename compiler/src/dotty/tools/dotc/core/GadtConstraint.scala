@@ -61,6 +61,8 @@ sealed abstract class GadtConstraint extends Showable {
   def constraintPatternType(pat: Type, scrut: Type)(using Context): Boolean
 
   def isWorking: Boolean = false
+
+  def isABound(tr: NamedType, bound: Type, upper: Boolean)(using Context) = false
 }
 
 final class ProperGadtConstraint private(
@@ -76,18 +78,24 @@ final class ProperGadtConstraint private(
 
   override def isWorking: Boolean = working
 
-  inline private def performWork[T](inline op: => T): T =
+  private def performWork[T](op: => T): T =
+    val savedWorking = working
     working = true
-    val res = op
-    working = false
-    res
+    try op
+    finally working = savedWorking
+
+  private def checkCtx(using ctx: Context) =
+    assert(ctx.gadt eq this)
+//    ()
 
   override def asConstraint(using Context): Constraint = performWork {
+    checkCtx
     knowledge.asExternalizedConstraint
   }
 
   /** Exposes ConstraintHandling.subsumes */
   def subsumes(left: GadtConstraint, right: GadtConstraint, pre: GadtConstraint)(using Context): Boolean = performWork {
+    checkCtx
 //    def extractConstraint(g: GadtConstraint) = g match {
 //      case s: ProperGadtConstraint => s.constraint
 //      case EmptyGadtConstraint => OrderingConstraint.empty
@@ -100,7 +108,14 @@ final class ProperGadtConstraint private(
     ???
   }
 
+  override def isABound(tr: NamedType, bound: Type, upper: Boolean)(using Context) = performWork {
+    checkCtx
+    val res = knowledge.isABound(tr, bound, upper)
+    res
+  }
+
   override def constraintPatternType(pat: Type, scrut: Type)(using ctx: Context): Boolean = performWork {
+    checkCtx
     val res = knowledge.constraintPatternType(pat, scrut)
     // TODO: This seems too simple
     if res then
@@ -109,22 +124,25 @@ final class ProperGadtConstraint private(
   }
 
   override def addToConstraint(params: List[Symbol])(using ctx: Context): Boolean = performWork {
-    knowledge.addSymbols(params)
+    checkCtx
+    val res = knowledge.addSymbols(params)
+    res
   }
 
   override def addBound(sym: Symbol, bound: Type, isUpper: Boolean)(using Context): Boolean = performWork {
+    checkCtx
     knowledge.addBound(sym, bound, isUpper)
   }
 
   override def isLess(sym1: Symbol, sym2: Symbol)(using Context): Boolean = performWork {
-    println(i"IS $sym1 <: $sym2 ?")
+    checkCtx
     val res = knowledge.isLess(sym1, sym2)
-    println(s" --> $res")
+//    println(i"IS $sym1 <: $sym2 ? $res")
     res
   }
 
   override def fullBounds(sym: Symbol)(using ctx: Context): TypeBounds = performWork {
-    // TODO: ???
+    checkCtx
     val res = knowledge.boundsForSym(sym, true)
     if res != null then
       println(i"Full Bounds for $sym:    $res")
@@ -134,6 +152,7 @@ final class ProperGadtConstraint private(
   }
 
   override def bounds(sym: Symbol)(using ctx: Context): TypeBounds = performWork {
+    checkCtx
     /*
     val res = knowledge.findECForSym(sym)
       // TODO: Bounds may return ordering between syms, which the doc comment says that it does not...
@@ -147,13 +166,16 @@ final class ProperGadtConstraint private(
   }
 
   override def contains(sym: Symbol)(using Context): Boolean = performWork {
+    checkCtx
     val res = knowledge.findECForSym(sym).isDefined
 //    println(s"CONTAINS $sym ?  $res")
 //    println(knowledge.symsEC)
     res
   }
 
+  // TODO: Il faudrait faire un GLB et un LUB
   override def approximation(sym: Symbol, fromBelow: Boolean)(using Context): Type = performWork {
+    checkCtx
     val bnds = knowledge.boundsForSym(sym, true)
     val res = if bnds.lo eq bnds.hi then
       bnds.lo
@@ -167,7 +189,8 @@ final class ProperGadtConstraint private(
       else bnds.hi
 
     println(i"Approx (fromBelow = $fromBelow)  $sym ~> $res   (obtained bounds $bnds)")
-//    println(debugBoundsDescription)
+    println(debugBoundsDescription)
+    println("-----------")
     res
     /*
     val param = knowledge.findECForSym(sym).get._2.origin
@@ -202,12 +225,11 @@ final class ProperGadtConstraint private(
 
   override def fresh: GadtConstraint =
     assert(!working)
-//    println("FRESH GADT")
     new ProperGadtConstraint(knowledge.fresh, working = false)
 
   def restore(other: GadtConstraint): Unit =
     assert(!working)
-//    println("RESTORE GADT")
+//    println("  RESTORE")
     other match {
       case other: ProperGadtConstraint =>
         this.knowledge = other.knowledge
@@ -310,7 +332,7 @@ final class ProperGadtConstraint private(
 
   override def contains(sym: Symbol)(using Context) = false
 
-  override def constraintPatternType(pat: Type, scrut: Type)(using Context): Boolean = unsupported("EmptyGadtConstraint.constraintPatternType")
+  override def constraintPatternType(pat: Type, scrut: Type)(using Context): Boolean = true // unsupported("EmptyGadtConstraint.constraintPatternType")
   override def addToConstraint(params: List[Symbol])(using Context): Boolean = unsupported("EmptyGadtConstraint.addToConstraint")
   override def addBound(sym: Symbol, bound: Type, isUpper: Boolean)(using Context): Boolean = unsupported("EmptyGadtConstraint.addBound")
 

@@ -310,16 +310,14 @@ final case class Knowledge private(
 
     dets.get(ec).map { detTH =>
       val res = externalizeType(storedTypes(detTH), Map.empty)
-      TypeBounds(res, res)
+      TypeAlias(res)
     }.getOrElse {
       val extTyVars = externalTyVarsOfEC(ec)
       def externalizeAndFilter(t: Type): Option[Type] =
         val ext = externalizeType(t, Map.empty)
-        // TODO: Et si un symbol n'apparait pas en tête mais en tycon, devrait-on l'exclure?
         // TODO: This is to conform to [[GadtConstraint#bounds]] saying that the result "does not contain lower/upper symbols"
         // TODO: So, should we filter out symbols that have interdependencies/ordering???
         // TODO: Do we want to include our external tyvars?
-        // TODO: A faire avec occursInHead ou un truc comme ça
 //         if (ext == sym.typeRef) || (!full && symsEC.exists((s, _) => s.typeRef.occursIn(ext))) then
         if occursInHead(sym, ext) || (!full && symsEC.exists((s, _) => occursInHead(s, ext))) then
           None
@@ -337,7 +335,10 @@ final case class Knowledge private(
       val combinedHi = extHis.reduceLeftOption(AndType.makeHk)
         .getOrElse(topOfKind(typeVarReprs(ec)))
 
-      TypeBounds(combinedLo, combinedHi)
+      if combinedLo == combinedHi then
+        TypeAlias(combinedLo)
+      else
+        TypeBounds(combinedLo, combinedHi)
     }
 
 
@@ -389,9 +390,16 @@ final case class Knowledge private(
     // For instance, the top of the HK type [X] =>> T is [X] =>> Any (same kind), but its bottom type is Nothing (different kind)
     // Since Nothing and [X] ==> T do not have the same kind, OrType/AndType.makeHk mixes them in a way that is unsuitable for us.
     // So we just filter it out. We do not need to do that for Any because it does not suffer from the same problem as Nothing.
-    val loTys = loECs.flatMap(loEC => members(loEC).map(storedTypes)).filterNot(_.isNothingType)
-    val hiTys = hiECs.flatMap(hiEC => members(hiEC).map(storedTypes))
+    val loTys = loECs.flatMap { loEC =>
+      dets.get(loEC).map(detTH => Set(storedTypes(detTH)))
+        .getOrElse(members(loEC).map(storedTypes).toSet)
+    }.filterNot(_.isNothingType)
+    val hiTys = hiECs.flatMap { hiEC =>
+      dets.get(hiEC).map(detTH => Set(storedTypes(detTH)))
+        .getOrElse(members(hiEC).map(storedTypes).toSet)
+    }
 
+    // TODO: Do something if determined
     // All types belonging to that EC are going to appear as lower and upper bounds.
     val equalTypes =
       if inclusive then members(ec).map(storedTypes)
@@ -651,8 +659,8 @@ final case class Knowledge private(
       return false
     origCstrt = ctx.typerState.constraint.asInstanceOf[OrderingConstraint]
     val cstrts = createConstraints(pat, scrut) ++ breakConstraint(origCstrt)
-    println(i"Constraint for $scrut matches $pat:")
-    println("  " ++ cstrts.map((s, t) => i"$s <: $t").mkString(", "))
+//    println(i"Constraint for $scrut matches $pat:")
+//    println("  " ++ cstrts.map((s, t) => i"$s <: $t").mkString(", "))
     val res = simplifyLoop(cstrts)
     res
 
@@ -683,8 +691,8 @@ final case class Knowledge private(
           val hi = tb.hi.subst(syms, tvars)
           simplifyLoop(Set((lo, symTyVar), (symTyVar, hi)))
     }
-    println(s"ADDED THE SYMBOLS: $res")
-    println(debugString)
+//    println(s"ADDED THE SYMBOLS: $res")
+//    println(debugString)
 //    println("======================")
     res
 
@@ -708,6 +716,17 @@ final case class Knowledge private(
     findECForSym(lhs).zip(findECForSym(rhs)).map {
       case ((lhsEC, _), (rhsEC, _)) =>
         lhsEC == rhsEC || gSub.chain(lhsEC, rhsEC).isDefined
+    }.getOrElse(false)
+
+  def isABound(tr: NamedType, bound: Type, upper: Boolean)(using Context): Boolean =
+    // TODO: findEC a bit too restrictive: if we have an applied EC or a DNF of ECs, we should be able to do something as well
+    val trEC = findEC(tr)
+    val boundEC = findEC(bound)
+    trEC.zip(boundEC).map {
+      case ((trEC, _), (boundEC, _)) =>
+        trEC == boundEC
+          || (upper && gSub.chain(trEC, boundEC).isDefined)
+          || (!upper && gSub.chain(boundEC, trEC).isDefined)
     }.getOrElse(false)
 
   def simplifyLoop(cstrts: Set[(Type, Type)])(using Context): Boolean =
@@ -1427,7 +1446,7 @@ final case class Knowledge private(
 
   // TODO: Name
   def TFindOrCreateEC(t: Type)(using ctx: Context): (ECH, TypeVar) =
-    val tayst = findEC(t)
+//    val tayst = findEC(t)
     val got = TFindOrCreateEC(t, Nil, true, true)
     val tyVar = got.asInstanceOf[TypeVar]
     val ec = revTypeVarReprs(tyVar)
@@ -1448,13 +1467,16 @@ final case class Knowledge private(
   //  -[a][args]
   //  -[X >: ... <: ...] =>> [a][args]
   //  All of these can be transformed to plain Type accordingly
+  //  Refactor to not force an EC in head position (i.e., it could return a composition of EC types)
   def TFindOrCreateEC(t0: Type,
     bounds: BoundsInfo,
     inHead: Boolean,
     create: Boolean)(using ctx: Context): Type =
     val t = etaExpandIfNeeded(t0)
     t match
-      case t: TypeParamRef => t
+      // TODO: There can be TypeParamRefs from a TypeVar
+      // TODO: If it comes from a typevar, couldn't we just wrap it up again in that typevar ? (may be stripped by TypeComparer...)
+      case t: TypeParamRef if bounds.exists(_._2 == t) => t
 
       // TODO: Say cannot be transformed into an EC (as such, can never be in head?)
       case tb@TypeBounds(lo, hi) =>
@@ -1797,9 +1819,27 @@ final case class Knowledge private(
 
   //////////////////////////////////////////////////////////////////////////////////
 
-  def TECEquiv(t: Type, s: Type)(using ctx: Context): Boolean =
-    val combinedConstraints = asConstraint
-    isSameInFrozenConstraint(t, s, combinedConstraints)
+//  def TECEquiv(t: Type, s: Type)(using ctx: Context): Boolean =
+//    val combinedConstraints = asConstraint
+//    isSameInFrozenConstraint(t, s, combinedConstraints)
+
+  // TODO: Assumes dealias and all these things are already taken care of (applies to HK Bounds as well)
+  def TECEquiv(s: Type, t: Type)(using ctx: Context): Boolean =
+    (s, t) match
+      case (ECTypeVar(ecS), ECTypeVar(ecT)) =>
+        unionFind.find(ecS) == unionFind.find(ecT)
+      case (AppliedECTypeVar(ecS, argsS), AppliedECTypeVar(ecT, argsT)) =>
+        unionFind.find(ecS) == unionFind.find(ecT)
+          && argsS.corresponds(argsT)(TECEquiv(_, _))
+      case (AppliedType(tyconS, argsS), AppliedType(tyconT, argsT)) =>
+        tyconS == tyconT && argsS.corresponds(argsT)(TECEquiv(_, _))
+      case (hkS: HKTypeLambda, hkT: HKTypeLambda) =>
+        Variances.variancesConform(hkS.typeParams, hkT.typeParams)
+          && hkS.typeParams.corresponds(hkT.typeParams)((tparamS, tparamT) =>
+            TECEquiv(tparamT.paramInfo.subst(hkT, hkS), tparamS.paramInfo))
+          && TECEquiv(hkS.resType, hkT.resType.subst(hkT, hkS))
+      case _ => s == t
+
 
   // TODO: Marche assui avec refn on dirait ?
   def BSubsumes(l: BoundsInfo, r: BoundsInfo)(using ctx: Context): Boolean =

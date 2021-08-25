@@ -47,7 +47,7 @@ object GadtUtils:
   def boundsInfoOf(hk: HKTypeLambda): BoundsInfo =
     val hkVariance =
       if hk.declaredVariances == Nil then
-        List.fill(hk.paramNames.size)(Variances.varianceFromInt(1))
+        List.fill(hk.paramNames.size)(Variances.varianceFromInt(0))
       else hk.declaredVariances
     hkVariance.zip(hk.paramRefs.zip(hk.paramInfos)).map { case (a, (b, c)) => (a, b, c) }
 
@@ -209,6 +209,7 @@ object GadtUtils:
     result
 
   def unconstrainedTypeVar(targetKind: List[Type])(using Context): TypeVar =
+    // TODO: Et la variance????
     val hkBound = HKTypeLambda(HKTypeLambda.syntheticParamNames(targetKind.length), targetKind.map(TypeBounds.upper compose topOfKind), defn.AnyType)
     // TODO: Will we get targetKind => * as kind or will we get a thing that is "off by one" ?
     unconstrainedTypeVar(hkBound)
