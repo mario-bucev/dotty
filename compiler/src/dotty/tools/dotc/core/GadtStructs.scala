@@ -671,7 +671,7 @@ final case class Knowledge private(
     symsEC.get(sym) match
       case Some(ec) => (ec, typeVarReprs(ec))
       case None =>
-        val (ec, tyVar) = TFindOrCreateEC(sym.denot.typeRef)
+        val (ec, tyVar) = findOrCreateEC(sym.denot.typeRef)
         symsEC += sym -> ec
         (ec, tyVar)
 
@@ -1099,9 +1099,9 @@ final case class Knowledge private(
 //    val msg = i"COMPACT $s <: $t"
 //    println(msg)
 //    println(debugString)
-    val (sEC, sTyVar) = TFindOrCreateEC(s)
+    val (sEC, sTyVar) = findOrCreateEC(s)
 //    println(i"EC for $s is [$sEC] (with tyvar $sTyVar)")
-    val (tEC, tTyVar) = TFindOrCreateEC(t)
+    val (tEC, tTyVar) = findOrCreateEC(t)
 //    println(i"EC for $t is [$tEC] (with tyvar $tTyVar)")
 
     addIneq(sEC, tEC) match
@@ -1435,86 +1435,117 @@ final case class Knowledge private(
 
   //////////////////////////////////////////////////////////////////////
 
-  def TFindEC(t: Type)(using ctx: Context): Option[(ECH, TypeVar)] =
+//  def TFindEC(t: Type)(using ctx: Context): Option[(ECH, TypeVar)] =
+//    try
+//      val got = doInternalize(t, Nil, true, false)
+//      val tyVar = got.asInstanceOf[TypeVar]
+//      val ec = revTypeVarReprs(tyVar)
+//      Some((ec, tyVar))
+//    catch
+//      case ECNotFound() => None
+
+//  // TODO: Name
+//  def TFindOrCreateEC(t: Type)(using ctx: Context): (ECH, TypeVar) =
+////    val tayst = findEC(t)
+//    val got = doInternalize(t, Nil, true)
+//    val tyVar = got.asInstanceOf[TypeVar]
+//    val ec = revTypeVarReprs(tyVar)
+//    (ec, tyVar)
+
+//  def findEC(t: Type)(using ctx: Context): Option[(ECH, TypeVar)] =
+//    try
+//      val internalized = doInternalize(t, Nil, true)
+//      val tyVar = got.asInstanceOf[TypeVar]
+//      val ec = revTypeVarReprs(tyVar)
+//      Some((ec, tyVar))
+//    catch
+//      case ECNotFound() => None
+
+  def findOrCreateEC(t: Type)(using ctx: Context): (ECH, TypeVar) =
+    val internalized = internalize(t, create = true).get
+    internalized match
+      case ECTypeVar(ec0) =>
+        val ec = unionFind.find(ec0)
+        (ec, typeVarReprs(ec))
+      case hk@HKTypeLambda(params, AppliedECTypeVar(ec0, args)) if params.corresponds(args)((param, arg) => param.paramRef == arg) =>
+        val ec = unionFind.find(ec0)
+        (ec, typeVarReprs(ec))
+      case _ =>
+        findEquivalentMember(internalized, Nil)
+          .getOrElse {
+            val (newEC, _) = createEC(internalized, Nil)
+            (newEC, typeVarReprs(newEC))
+          }
+
+  def internalize(t: Type, create: Boolean)(using ctx: Context): Option[Type] =
     try
-      val got = TFindOrCreateEC(t, Nil, true, false)
-      val tyVar = got.asInstanceOf[TypeVar]
-      val ec = revTypeVarReprs(tyVar)
-      Some((ec, tyVar))
+      Some(doInternalize(t, Nil, create))
     catch
       case ECNotFound() => None
 
-  // TODO: Name
-  def TFindOrCreateEC(t: Type)(using ctx: Context): (ECH, TypeVar) =
-//    val tayst = findEC(t)
-    val got = TFindOrCreateEC(t, Nil, true, true)
-    val tyVar = got.asInstanceOf[TypeVar]
-    val ec = revTypeVarReprs(tyVar)
-    (ec, tyVar)
+  def findEquivalentMember(t: Type, scope: BoundsInfo)(using Context): Option[(ECH, TypeVar)] =
+    if notAppearingIn(scope.map(_._2).toSet, t) then
+      val candidatesIt = allMembers.iterator
+      while (candidatesIt.hasNext) do
+        val candHandle = candidatesIt.next()
+        val cand = storedTypes(candHandle)
+        if cand.hasSameKindAs(t) && TECEquiv(cand, t) then
+          val theEC = revMembers(candHandle)
+          return Some((theEC, typeVarReprs(theEC)))
+      None
+    else None
 
-  def findEC(t: Type)(using ctx: Context): Option[(ECH, TypeVar)] =
-    try
-      val got = TFindOrCreateEC(t, Nil, true, false)
-      val tyVar = got.asInstanceOf[TypeVar]
-      val ec = revTypeVarReprs(tyVar)
-      Some((ec, tyVar))
-    catch
-      case ECNotFound() => None
-
-  // TODO: Name
   // TODO: Should return a type of the following:
   //  -[a]
   //  -[a][args]
-  //  -[X >: ... <: ...] =>> [a][args]
+  //  -Cls | Cls[args]
+  //  -[X >: ... <: ...] =>> [a][args] | [a] | Cls | Cls[args]
   //  All of these can be transformed to plain Type accordingly
-  //  Refactor to not force an EC in head position (i.e., it could return a composition of EC types)
-  def TFindOrCreateEC(t0: Type,
-    bounds: BoundsInfo,
-    inHead: Boolean,
-    create: Boolean)(using ctx: Context): Type =
+  def doInternalize(t0: Type, scope: BoundsInfo, create: Boolean)(using ctx: Context): Type =
+    def helper(t: Type, scope: BoundsInfo): Type =
+      t match
+        case t if t.hasSimpleKind || t.hasAnyKind =>
+          findEquivalentMember(t, scope).map(_._2)
+            .orElse(TECTryFindApplied(t, scope))
+            .getOrElse {
+              if create then createEC(t, scope)._2
+              else throw ECNotFound()
+            }
+        // TODO: After all, could we call TECTryFindApplied for HK types as well?
+        case hk: HKTypeLambda =>
+          findEquivalentMember(t, scope).map(_._2)
+            .getOrElse {
+              if create then createEC(t, scope)._2
+              else throw ECNotFound()
+            }
+    end helper
+
     val t = etaExpandIfNeeded(t0)
     t match
       // TODO: There can be TypeParamRefs from a TypeVar
       // TODO: If it comes from a typevar, couldn't we just wrap it up again in that typevar ? (may be stripped by TypeComparer...)
-      case t: TypeParamRef if bounds.exists(_._2 == t) => t
+      case t: TypeParamRef if scope.exists(_._2 == t) => t
 
-      // TODO: Say cannot be transformed into an EC (as such, can never be in head?)
       case tb@TypeBounds(lo, hi) =>
-        tb.derivedTypeBounds(TFindOrCreateEC(lo, bounds, inHead, create), TFindOrCreateEC(hi, bounds, inHead, create))
+        TypeBounds(doInternalize(lo, scope, create), doInternalize(hi, scope, create))
 
       // TODO: LazyRef ok?
-      case lr: LazyRef => TFindOrCreateEC(lr.ref, bounds, inHead, create)
+      case lr: LazyRef => doInternalize(lr.ref, scope, create)
 
       // TODO: RecType ok?
-      case rec: RecType => TFindOrCreateEC(rec.parent, bounds, inHead, create)
+      case rec: RecType => doInternalize(rec.parent, scope, create)
 
       case AppliedType(tycon, args) =>
-        val argsRec = args.map(a => TFindOrCreateEC(a, bounds, false, create))
+        val argsRec = args.map(a => doInternalize(a, scope, create))
         tycon match
-          case ECTypeVar(ec) if !bounds.isEmpty =>
+          case ECTypeVar(ec) =>
             AppliedType(typeVarReprs(ec), argsRec)
-          // TODO: Typevar ok ?
-          // TODO: Do we capture all usage of such tyvars?
+          case tr: TypeRef if tr.symbol.isClass =>
+            AppliedType(tr, argsRec)
           case tv: TypeVar if tv.isInstantiated =>
-            TFindOrCreateEC(tv.underlying.appliedTo(args), bounds, inHead, create)
-//          // TODO: Explain why
-//          // TODO: Correct?
-//          case tv: TypeVar if create =>
-//            println(s"AAAAAAAAAAAAAA $tv")
-//            // We create an EC for [X] =>> TV[X]
-//            val (_, extTv) = TFindOrCreateEC(tv) // Will be eta-expanded
-//            if bounds.isEmpty then
-//              TECFindOrCreateEC(AppliedType(extTv, argsRec), bounds, create)
-//            else
-//              AppliedType(extTv, argsRec)
-          case _: TypeParamRef if !bounds.isEmpty => // TODO: this if condition should be always true?
-            // HK type bounded in an enclosing HK
-            AppliedType(tycon, argsRec)
-          case tycon: TypeRef if tycon.symbol.isClass && !bounds.isEmpty =>
-            AppliedType(tycon, argsRec)
-          // TODO: Other cases ok?
+            doInternalize(tv.underlying.appliedTo(argsRec), scope, create)
           case _ =>
-            TECFindOrCreateEC(AppliedType(tycon, argsRec), bounds, create)
+            helper(AppliedType(tycon, argsRec), scope)
 
       case t: AndOrType =>
         val dnfDisjs = disjunctions(t)
@@ -1522,128 +1553,85 @@ final case class Knowledge private(
         for (disj <- dnfDisjs) {
           val conjsRec = mutable.Set.empty[Type]
           for (conj <- disj) {
-            conj match
-              case AppliedType(tycon: TypeRef, args) if tycon.symbol.isClass =>
-                val argsRec = args.map(a => TFindOrCreateEC(a, bounds, false, create))
-                conjsRec += AppliedType(tycon, argsRec)
-              case t: TypeRef if t.symbol.isClass =>
-                conjsRec += t
-              case conj =>
-                conjsRec += TFindOrCreateEC(conj, bounds, inHead, create)
+            conjsRec += doInternalize(conj, scope, create)
+//            conj match
+//              case AppliedType(tycon: TypeRef, args) if tycon.symbol.isClass =>
+//                val argsRec = args.map(a => TFindOrCreateEC(a, scope, false, create))
+//                conjsRec += AppliedType(tycon, argsRec)
+//              case t: TypeRef if t.symbol.isClass =>
+//                conjsRec += t
+//              case conj =>
+//                conjsRec += TFindOrCreateEC(conj, scope, create)
           }
           disjsRec += conjsRec.toSet
         }
         // TODO: Must simplify first
-        val dnfRec = disjunctionsToType(disjsRec.toSet)
-        val isDNF = !(disjsRec.size == 1 && disjsRec.head.size == 1)
-        if isDNF && inHead && !bounds.isEmpty then // TODO: !bounds.isEmpty -> no termref appearing in dnf
-          dnfRec
-        else
-          TECFindOrCreateEC(dnfRec, bounds, create)
+        disjunctionsToType(disjsRec.toSet)
 
       case ECTypeVar(ec) => typeVarReprs(ec)
 
-      // TODO: Typevar ok ?
-      // TODO: Do we capture all usage of such tyvars?
-      case tv: TypeVar if tv.isInstantiated => TFindOrCreateEC(tv.underlying, bounds, inHead, create)
+      case tv: TypeVar =>
+        if tv.isInstantiated then
+          doInternalize(tv.underlying, scope, create)
+        else
+          helper(tv, scope)
 
-      // TODO: Typevar ok ?
-      case t: (TypeRef | TypeVar) =>
-        if inHead && !bounds.isEmpty then t
-        else TECFindOrCreateEC(t, bounds, create)
+      case tr: TypeRef =>
+        if tr.symbol.isClass then tr
+        else helper(tr, scope)
 
       case hk: HKTypeLambda =>
         val hkBoundsInfo = boundsInfoOf(hk)
-        val hkBoundsRec = BFindOrCreateEC(hkBoundsInfo, bounds, inHead, create)
         hk.resType match
+          // [X] =>> ec[X]
+          // TODO: What about the bounds?
+          case AppliedType(ECTypeVar(ec), args) if args == hkBoundsInfo.map(_._2) =>
+            typeVarReprs(ec)
+          case _ =>
+            val hkBoundsRec = doInternalizeBounds(hkBoundsInfo, scope, create)
+            val bodyRec = doInternalize(hk.resType, scope ++ hkBoundsRec, create)
+            helper(hk.newLikeThis(hk.paramNames, hkBoundsRec.map(_._3), bodyRec), scope)
+        /*
+        hk.resType match
+          // [X] =>> ec[X]
           case AppliedType(ECTypeVar(ec), args) if args == hkBoundsInfo.map(_._2) =>
             typeVarReprs(ec)
           // [X] =>> TyCon[X]
           case AppliedType(tycon: TypeRef, args) if args == hkBoundsInfo.map(_._2) =>
-             TECFindOrCreateEC(hk.newLikeThis(hk.paramNames, hkBoundsRec.map(_._3), hk.resType), bounds, create)
-          // TODO: Typevar ok ?
-          // TODO: Typevar ok ?
-          // TODO: Typevar ok ?
+             helper(hk.newLikeThis(hk.paramNames, hkBoundsRec.map(_._3), hk.resType), scope, create)
           case AppliedType(tycon: TypeVar, args) if args == hkBoundsInfo.map(_._2) && !tycon.isInstantiated =>
-             TECFindOrCreateEC(hk.newLikeThis(hk.paramNames, hkBoundsRec.map(_._3), hk.resType), bounds, create)
+             helper(hk.newLikeThis(hk.paramNames, hkBoundsRec.map(_._3), hk.resType), scope, create)
           case _ =>
             // TODO: What if body not of simple kind ?
-            val bodyRec = TFindOrCreateEC(hk.resType, bounds ++ hkBoundsRec, inHead, create)
-            TECFindOrCreateEC(hk.newLikeThis(hk.paramNames, hkBoundsRec.map(_._3), bodyRec), bounds, create)
+            val bodyRec = TFindOrCreateEC(hk.resType, scope ++ hkBoundsRec, create)
+            helper(hk.newLikeThis(hk.paramNames, hkBoundsRec.map(_._3), bodyRec), scope, create)
+        */
       case tr: TermRef =>
         // TODO: What to do with this??? should we access "underlying"???
-        TECFindOrCreateEC(tr, bounds, create)
+        helper(tr, scope)
+
       case tr: ConstantType =>
         // TODO: What to do with this??? should we access "underlying"???
-        TECFindOrCreateEC(tr, bounds, create)
+        helper(tr, scope)
 
       case other =>
         println(i"TFindECOrCreate other match: EC For $other:")
         println(s"   $other")
-        val res = TECFindOrCreateEC(other, bounds, create)
+        val res = helper(other, scope)
         println(i"For that type, result is: $res")
         res
 
-  // TODO: Yikes, difficult to differentiate
-  def BFindOrCreateEC(
-    hkBounds: BoundsInfo,
-    enclosingBounds: BoundsInfo,
-    inHead: Boolean,
-    create: Boolean)(using Context): BoundsInfo =
+  def doInternalizeBounds(hkBounds: BoundsInfo, enclosingBounds: BoundsInfo, create: Boolean)(using Context): BoundsInfo =
     val boundsTmp = enclosingBounds ++ hkBounds.map {
       case (v, tyParam, _) => (v, tyParam, TypeBounds.upper(topOfKind(tyParam)))
     }
     hkBounds.map { case (v, tyName, tb) =>
-      val loRec = TFindOrCreateEC(tb.lo, boundsTmp, true, create)
-      val hiRec = TFindOrCreateEC(tb.hi, boundsTmp, true, create)
+      val loRec = doInternalize(tb.lo, boundsTmp, create)
+      val hiRec = doInternalize(tb.hi, boundsTmp, create)
       (v, tyName, TypeBounds(loRec, hiRec))
     }
 
-  def TECFindOrCreateEC(
-    t: Type,
-    bounds: BoundsInfo,
-    create: Boolean)(using Context): Type =
-    t match
-      case t if t.hasSimpleKind || t.hasAnyKind =>
-        if notAppearingIn(bounds.map(_._2).toSet, t) then
-          val candidatesIt = allMembers.iterator
-          while (candidatesIt.hasNext) {
-            val h = candidatesIt.next()
-            storedTypes.get(h) match
-              //TODO: For anykind...
-              case Some(s) if s.hasSimpleKind => // && TECEquiv(...)
-                if TECEquiv(t, s) then
-                  return typeVarReprs(revMembers(h))
-              case _ => ()
-          }
-
-        TECTryFindApplied(t, bounds) match
-          case Some(res) => res
-          case None =>
-            if create then
-              TECCreate(t, bounds)
-            else
-              throw ECNotFound()
-
-      case hk: HKTypeLambda =>
-        if notAppearingIn(bounds.map(_._2).toSet, t) then
-          val candidatesIt = allMembers.iterator
-          while (candidatesIt.hasNext) {
-            val h = candidatesIt.next()
-            storedTypes.get(h) match
-              case Some(hkCand: HKTypeLambda) if hk.hasSameKindAs(hkCand)
-                && TECEquiv(hk, hkCand) => // TODO: Takes care of bounds?
-                // && BECEquiv(boundsInfoOf(hk), boundsInfoOf(hkCand)) =>
-                // TODO: Explain why we do not eta-expand...
-                return typeVarReprs(revMembers(h))
-              case _ => ()
-          }
-        if create then
-          TECCreate(t, bounds)
-        else
-          throw ECNotFound()
-
-  def TECCreate(t: Type, scope: BoundsInfo)(using ctx: Context): Type =
+  def createEC(t: Type, scope: BoundsInfo)(using ctx: Context): (ECH, Type) =
     val newEC = unionFind.add()
     // TODO: Do not store anything if t is a TyVar!
     val (typeToStore: Type, tyVarRepr: TypeVar, typeToReturn: Type) = {
@@ -1713,11 +1701,10 @@ final case class Knowledge private(
       typeVarReprs += newEC -> tyVarRepr
       revTypeVarReprs += tyVarRepr -> newEC
 
-    typeToReturn
+    (newEC, typeToReturn)
 
   // TODO: Ensure of simple kind
-  def TECTryFindApplied(t: Type,
-    bounds: BoundsInfo)(using Context): Option[Type] =
+  def TECTryFindApplied(t: Type, bounds: BoundsInfo)(using Context): Option[Type] =
     t match
       case _: (TypeVar | TypeRef) => None
       case t =>
@@ -1807,7 +1794,6 @@ final case class Knowledge private(
       case _ =>
         t.isAny || t.isAnyRef || t.isNothingType
 
-
   def isWeaklyDet(t: Type)(using Context): Boolean =
     t match
       case t: AndOrType =>
@@ -1824,13 +1810,24 @@ final case class Knowledge private(
 //    isSameInFrozenConstraint(t, s, combinedConstraints)
 
   // TODO: Assumes dealias and all these things are already taken care of (applies to HK Bounds as well)
+  // TODO: DNF Case
+  // TODO: DNF Case
+  // TODO: DNF Case
+  // TODO: DNF Case
   def TECEquiv(s: Type, t: Type)(using ctx: Context): Boolean =
+    def helper(ecA: ECH, other: Type): Boolean =
+      members(unionFind.find(ecA)).exists(candTH => TECEquiv(storedTypes(candTH), other))
+    assert(s.hasSameKindAs(t))
     (s, t) match
       case (ECTypeVar(ecS), ECTypeVar(ecT)) =>
         unionFind.find(ecS) == unionFind.find(ecT)
       case (AppliedECTypeVar(ecS, argsS), AppliedECTypeVar(ecT, argsT)) =>
         unionFind.find(ecS) == unionFind.find(ecT)
           && argsS.corresponds(argsT)(TECEquiv(_, _))
+      case (ECTypeVar(ecS), t) =>
+        helper(ecS, t)
+      case (s, ECTypeVar(ecT)) =>
+        helper(ecT, s)
       case (AppliedType(tyconS, argsS), AppliedType(tyconT, argsT)) =>
         tyconS == tyconT && argsS.corresponds(argsT)(TECEquiv(_, _))
       case (hkS: HKTypeLambda, hkT: HKTypeLambda) =>
