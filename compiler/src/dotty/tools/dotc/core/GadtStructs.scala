@@ -246,18 +246,33 @@ final case class Knowledge private(
 
   //////////////////////////////////////////////////////////////////////
 
-  // TODO: Is this even idiomatic ???
-  private object ECTypeVar:
-    def unapply(tv: TypeVar): Option[ECH] =
-    // TODO: Pas de qfind fait !! A faire manuellement
-    // TODO: ~> en fait pas besoin, merge s'en occupe
-    // TODO: ext2int ok ?
-      revTypeVarReprs.get(tv).orElse(ext2int.get(tv).map(revTypeVarReprs))
+  private object AsEC:
+    private def typeVarToEC(tv: TypeVar): Option[ECH] =
+      revTypeVarReprs.get(tv)
+        .orElse(ext2int.get(tv).map(revTypeVarReprs))
+        .map(unionFind.find)
 
-  private object AppliedECTypeVar:
-    def unapply(app: AppliedType): Option[(ECH, List[Type])] =
-      app match
-        case AppliedType(ECTypeVar(ec), args) => Some((ec, args))
+    def unapply(t: Type)(using Context): Option[ECH] =
+      t match
+        case tv: TypeVar => typeVarToEC(tv)
+        case HKTypeLambda(params, AppliedType(tv: TypeVar, args))
+        if params.corresponds(args)((param, arg) => param.paramRef == arg) =>
+          typeVarToEC(tv)
+        case _ => None
+
+  private object AsAppliedEC:
+    def unapply(t: Type)(using Context): Option[(ECH, List[Type])] =
+      t match
+        case AppliedType(AsEC(ec), args) => Some((ec, args))
+        case _ => None
+
+  private object AsClassOrTrait:
+    def unapply(t: Type)(using Context): Option[(ClassSymbol, List[Type])] =
+      t match
+        case tr: TypeRef if tr.symbol.isClass =>
+          Some((tr.symbol.asClass, Nil))
+        case AppliedType(tr: TypeRef, args) if tr.symbol.isClass =>
+          Some((tr.symbol.asClass, args))
         case _ => None
 
   //////////////////////////////////////////////////////////////////////
@@ -292,6 +307,9 @@ final case class Knowledge private(
   def updateMember(th: TH, ty: Type): Unit =
     storedTypes.update(th, ty)
 
+  def symsInEC(ec: ECH): Set[Symbol] =
+    symsEC.filter(_._2 == ec).map(_._1).toSet
+
   //////////////////////////////////////////////////////////////////////
 
   def occursInHead(sym: Symbol, t: Type)(using Context): Boolean =
@@ -312,20 +330,32 @@ final case class Knowledge private(
       val res = externalizeType(storedTypes(detTH), Map.empty)
       TypeAlias(res)
     }.getOrElse {
-      val extTyVars = externalTyVarsOfEC(ec)
+      // TODO: Not stable!!!!
+      // TODO: Not stable!!!!
+      // TODO: Not stable!!!!
+//      val arbitraryRepr = syms.last
+//      if arbitraryRepr != sym then
+//        TypeAlias(arbitraryRepr.typeRef)
+//      else
       def externalizeAndFilter(t: Type): Option[Type] =
+        // TODO: We don't need to this shenanigens if externalizeType pick the "representative symbol" correctly
         val ext = externalizeType(t, Map.empty)
-        // TODO: This is to conform to [[GadtConstraint#bounds]] saying that the result "does not contain lower/upper symbols"
-        // TODO: So, should we filter out symbols that have interdependencies/ordering???
-        // TODO: Do we want to include our external tyvars?
-//         if (ext == sym.typeRef) || (!full && symsEC.exists((s, _) => s.typeRef.occursIn(ext))) then
-        if occursInHead(sym, ext) || (!full && symsEC.exists((s, _) => occursInHead(s, ext))) then
-          None
-        else
-          Some(ext)
+        val ok = symsEC.forall {
+          case (otherSym, otherEC) =>
+            if otherEC == ec then
+              !occursInHead(otherSym, ext)
+            else
+              full || !occursInHead(otherSym, ext)
+//            if otherEC == ec then
+//              ext != otherSym.typeRef
+//            else
+//              full || !occursInHead(otherSym, ext)
+//            (ext != sym.typeRef) && (full || !occursInHead(otherSym, ext))
+        }
+        if ok then Some(ext)
+        else None
 
       val (los, his) = bounds(ec, inclusive = true)
-
       val extLos = los.flatMap(externalizeAndFilter)
       val extHis = his.flatMap(externalizeAndFilter)
 
@@ -341,8 +371,6 @@ final case class Knowledge private(
         TypeBounds(combinedLo, combinedHi)
     }
 
-
-  // TODO: Remove occurences that occur (...) at "top-level", because it can cause subtyping loop
   // TODO: Do the same for externalized bounds.
   // TODO: Bad name. Only internalized
   def bounds(ec0: ECH, inclusive: Boolean)(using Context): (Set[Type], Set[Type]) =
@@ -350,7 +378,7 @@ final case class Knowledge private(
     val loECs = gSub.strictLowerBounds(ec)
     val hiECs = gSub.strictUpperBounds(ec)
 
-    // TODO: Argumenter que, comme on ne store pas de ECTypeVar telle quelles dans les ECs, on n'a aucun risque "d'exclure" des "bonne" bounds
+    // TODO: Argumenter que, comme on ne store pas de AsEC telle quelles dans les ECs, on n'a aucun risque "d'exclure" des "bonne" bounds
     def ensureNonCyclic(tp: Type, fromBelow: Boolean): Type =
       tp match
         case tp: AndOrType =>
@@ -364,8 +392,7 @@ final case class Knowledge private(
               r1 & r2
         // TODO: Et les symbols ?
         // TODO: Et AppliedEC ?
-        case ECTypeVar(otherEC0) =>
-          val otherEC = unionFind.find(otherEC0)
+        case AsEC(otherEC) =>
           // TODO: Check if we got this right
           if otherEC == ec
             || (!fromBelow && loECs.contains(otherEC))
@@ -422,41 +449,6 @@ final case class Knowledge private(
   def strictUpperBounds(ec0: ECH): Set[Type] =
     val ec = unionFind.find(ec0)
     gSub.strictUpperBounds(ec).flatMap(hiEC => members(hiEC).map(storedTypes))
-
-  //////////////////////////////////////////////////////////////////////
-
-  /*
-  TODO: Certains points à résoundre:
-    - FindEC et tout ce bazard est vraiment nul est à repenser
-    - Voir là où il y a besoin de faire des unionFind.find d'ec
-    - Cette histoire de restore/fresh etc.
-        - ça à l'air ""OK""
-          - En fait non
-    - Pas déterministe --'
-    - Meilleur logging, là c'est un peu le bazard
-    - Des assertions d'invariants
-    - cache asConstraint
-    - Les TypeParamRef ne sont pas forcément des param qui sont bound à un outer scope!!!
-      - C'est souvent utilisé un peu comme des tyvars (voir Constraint et les TypeLambda)
-    - refn et path-dependant types
-    - La manière d'intégrer les connaissances précedentes ("origCstrt") est immonde.
-      - Le resType du PolyType est un MethodType, voir ce que cela implique
-    - Dealias à faire...
-    - TypeVar instantiation; il faut s'assurer qu'on couvre tous les cas (TFindOrCreate)
-    - def approximation
-      - Semble etre ok
-    - restore AGAIN
-    - mettre constant type & autre comme det
-    - utiliser bounds pour boundsForSym et asExtCstrt
-    - Voir cette histoire de skolem
-      - En fait, c'est en raison de 1 <: Int...
-    - "quoted patterns": ???
-    - instantiated external type var: il faudrait faire un merge (voir 2002-07) ?
-    -
-    - Voir la différence entre GadtCstr et OrdCstrts dans isSubtype
-    - Check false plus poussé: par example, si Int et String sont dans la même EC, il y a contradiction
-  */
-
 
   //////////////////////////////////////////////////////////////////////
 
@@ -524,6 +516,7 @@ final case class Knowledge private(
     val res = dets.get(ec).map(detTH => externalizeType(storedTypes(detTH), pending))
       .orElse(externalTyVarsOfEC(ec).headOption)
       // TODO: Externalize with symbols as well? Note that this can interfere with boundsForSym...
+      // TODO: Pick the "represnentative symbol"
       .orElse(symsEC.find((_, cand) => cand == ec).map(_._1.typeRef))
       .orElse(
         // TODO: This is quite fragile. Find another way of doing that!!!!
@@ -538,16 +531,9 @@ final case class Knowledge private(
     res
 
   def externalizeType(ty: Type, pending: Map[ECH, RecType])(using Context): Type =
-
-    def forDebugging(tp: Type, mapOver: Type => Type): Type =
-      if !tp.exists then
-        return NoType
-      tp match
-        // TODO: prefer this case once debugging finished:
-        //  case ECTypeVar(otherEC0) =>
-        case tv: TypeVar if revTypeVarReprs.get(tv).orElse(ext2int.get(tv).map(revTypeVarReprs)).isDefined =>
-          val otherEC0 = revTypeVarReprs.get(tv).orElse(ext2int.get(tv).map(revTypeVarReprs)).get
-          val otherEC = unionFind.find(otherEC0)
+    val tm = new TypeMap {
+      override def apply(tp: Type): Type = tp match
+        case AsEC(otherEC) =>
           // TODO: If we appear in an injective position and that we have a cycle, occur checks fails, so the GADT pattern is unreachable.
           //  This would be an interesting improvement.
           // TODO: This is very hacky... and does not seem to do what is intended???
@@ -563,9 +549,6 @@ final case class Knowledge private(
           }
         case _ =>
           mapOver(tp)
-
-    val tm = new TypeMap {
-      override def apply(tp: Type): Type = forDebugging(tp, mapOver)
     }
     tm(ty)
 
@@ -657,10 +640,13 @@ final case class Knowledge private(
     // TODO: Not pretty...
     if pat.isErroneous || scrut.isErroneous then
       return false
+    val derivedCstrts = createConstraints(pat, scrut) match
+      case Some(cstrts) => cstrts
+      case None => return false
     origCstrt = ctx.typerState.constraint.asInstanceOf[OrderingConstraint]
-    val cstrts = createConstraints(pat, scrut) ++ breakConstraint(origCstrt)
-//    println(i"Constraint for $scrut matches $pat:")
-//    println("  " ++ cstrts.map((s, t) => i"$s <: $t").mkString(", "))
+    val cstrts = derivedCstrts ++ breakConstraint(origCstrt)
+    println(i"Constraint for $scrut matches $pat:")
+    println("  " ++ cstrts.map((s, t) => i"$s <: $t").mkString(", "))
     val res = simplifyLoop(cstrts)
     res
 
@@ -719,15 +705,22 @@ final case class Knowledge private(
     }.getOrElse(false)
 
   def isABound(tr: NamedType, bound: Type, upper: Boolean)(using Context): Boolean =
-    // TODO: findEC a bit too restrictive: if we have an applied EC or a DNF of ECs, we should be able to do something as well
-    val trEC = findEC(tr)
-    val boundEC = findEC(bound)
-    trEC.zip(boundEC).map {
-      case ((trEC, _), (boundEC, _)) =>
+    val trInt = internalize(tr, create = false)
+    val boundInt = internalize(bound, create = false)
+    trInt.zip(boundInt).map {
+      case (AsEC(trEC), AsEC(boundEC)) =>
         trEC == boundEC
           || (upper && gSub.chain(trEC, boundEC).isDefined)
           || (!upper && gSub.chain(boundEC, trEC).isDefined)
+      case (tr, bound) =>
+        (upper && TECIsSubtype(tr, bound))
+        || (!upper && TECIsSubtype(bound, tr))
     }.getOrElse(false)
+
+  def instantiatedTVar(tvar: TypeVar, inst: Type)(using Context): Unit =
+    val (_, internalTvar) = findOrCreateEC(tvar)
+    val (_, instTvar) = findOrCreateEC(inst)
+    simplifyLoop(Set((internalTvar, instTvar), (instTvar, internalTvar)))
 
   def simplifyLoop(cstrts: Set[(Type, Type)])(using Context): Boolean =
     val cstrtsStack = mutable.Stack.from(cstrts)
@@ -778,7 +771,7 @@ final case class Knowledge private(
     res
 
   // TODO: this fn incorporates a weak form of deductionPathTyped
-  def createConstraints(pat0: Type, scrut0: Type)(using ctx: Context): Set[(Type, Type)] =
+  def createConstraints(pat0: Type, scrut0: Type)(using ctx: Context): Option[Set[(Type, Type)]] =
     def invariantIntersection(variances: List[Variance], argsL: List[Type], argsR: List[Type]): Set[(Type, Type)] =
       assert(variances.size == argsL.size)
       assert(argsL.size == argsR.size)
@@ -788,15 +781,33 @@ final case class Knowledge private(
         case (acc, _) => acc
       }
 
-    def invariantIntersections(variances: List[Variance], leftUpcasted: List[Type], argsR: List[Type]): Set[(Type, Type)] =
-      assert(variances.size == argsR.size)
-      leftUpcasted.foldLeft(Set.empty[(Type, Type)]) {
+    def relatedClassesIntersection(clsL: ClassSymbol, argsL: List[Type], clsR: ClassSymbol, argsR: List[Type]): Set[(Type, Type)] =
+      assert(clsL.classDenot.derivesFrom(clsR))
+      // Variance of the right-hand side class, not the left
+      val variances = clsR.typeParams.map(_.paramVariance)
+      val (leftUpcasted, boundsCstrts) = upcastTo(clsL, argsL, clsR)
+      leftUpcasted.foldLeft(boundsCstrts) {
         case (acc, AppliedType(_, argsL)) =>
           acc ++ invariantIntersection(variances, argsL, argsR)
         case (acc, _) => acc
       }
 
-    // TODO: Meh for term ref!!!
+    def eliminateImpossibleInhabitation(dnf: Set[Set[Type]]): Set[Set[Type]] =
+      def provablyNotInhabited(conj: Set[Type]): Boolean =
+        unordPairs(conj).exists {
+          case (AsClassOrTrait(s, _), AsClassOrTrait(t, _)) =>
+            val unrelated = !s.derivesFrom(t) && !t.derivesFrom(s)
+            val sIsTrait = s.is(Trait)
+            val tIsTrait = t.is(Trait)
+            val classIntersection = !s.is(Trait) && !t.is(Trait) && unrelated
+            val sFinal = (s.is(Final) || s.is(Case)) && unrelated
+            val tFinal = (t.is(Final) || t.is(Case)) && unrelated
+            classIntersection || sFinal || tFinal
+          case _ => false
+        }
+      dnf.filterNot(provablyNotInhabited)
+
+    // TODO: Meh for term ref!!! We don't want to lose them!!!
     // TODO: Suboptimal
     // TODO: Disgusting
     def stripTermRefAndExprType(t: Type): Type = t match
@@ -805,35 +816,39 @@ final case class Knowledge private(
       case t => t
 
     // TODO: Suboptimal
-    // TODO: Disgusting, absolutuely fragiele
+    // TODO: Disgusting, absolutuely fragile
     // TODO: For refinedtype, we can do better, provided that we have a val x: RefinedType
     def stripRefinement(tp: Type): Type = tp match {
       case tp: RefinedOrRecType => stripRefinement(tp.parent)
       case tp => tp
     }
 
+    // TODO: If we have an & in scrut, and/or an | in pat, could we break that into 2 recursive calls?
+
     ////////////////////////////////////////////////
+
     val pat0Dealias = stripRefinement(pat0.dealias)
     val scrut0Dealias = stripRefinement(scrut0.dealias)
 
-    // TODO: Figure things out
-    // TODO: Figure things out
-    // TODO: Figure things out
-    // TODO: No, Int is final but there are singleton types (constants) that are its subtypes, so this thing below does not apply!!!
-    // If the pattern is a final class, we generate the stronger constraint pat <: scrut
-    pat0Dealias match
-      case AppliedType(tyconPat: TypeRef, _) if tyconPat.symbol.isClass && (/*tyconPat.symbol.is(Final) || */tyconPat.symbol.is(Case)) =>
-        return Set((pat0Dealias, scrut0Dealias))
-      case tyconPat: TypeRef if tyconPat.symbol.isClass && (/*tyconPat.symbol.is(Final)|| */tyconPat.symbol.is(Case)) =>
-        return Set((pat0Dealias, scrut0Dealias))
-      // TODO: Does this properly cover object within enum and "object module"?
-      case tr: TermRef if (tr.symbol.is(CaseVal) || tr.symbol.is(Final)) =>
-        return Set((pat0Dealias, scrut0Dealias))
-      case _ => ()
-//    pat0Dealias match
-//      case tr: TermRef =>
-//        println(i"  for $pat0Dealias, we have flags = ${tr.symbol.flagsString}")
-//      case _ => ()
+    // If the pattern is a final class, we can generate even stronger constraints pat <: scrut \/ scrut <: pat
+
+    val moreConstraints: Set[(Type, Type)] = {
+      val more = pat0Dealias match
+        case AsClassOrTrait(cls, _) =>
+          cls.is(Final) || cls.is(Case)
+        // TODO: Does this properly cover object within enum and "object module"?
+        case tr: TermRef =>
+          tr.symbol.is(CaseVal) || tr.symbol.is(Final)
+        case _ => false
+      if more then
+        // TODO: argue why we have pat <: scrut *or* scrut <: pat, and why we can generate stronger constraint (maybe put that above)
+        val l = deductionIneq(pat0Dealias, scrut0Dealias)
+        val r = deductionIneq(scrut0Dealias, pat0Dealias)
+        approxDisj(l, r) match
+          case Some(cstrts) => cstrts
+          case None => return None // Contradiction found, we early-exit this function
+      else Set.empty
+    }
 
     // TODO: dealias + strip ok?
     // TODO: What if we have something like TermRef & TermRef for pat or scrut ???
@@ -842,34 +857,32 @@ final case class Knowledge private(
     val scrut = stripTermRefAndExprType(scrut0Dealias)
 
     val intersectDNF = disjunctions(pat & scrut)
-    val inCommon = commonTypes(intersectDNF)
+    val intersectDNF2 = eliminateImpossibleInhabitation(intersectDNF)
+    val inCommon = commonTypes(intersectDNF2)
     val pairs = inCommon.flatMap(a => inCommon.flatMap(b => if a == b then None else Some((a, b))))
-    pairs.foldLeft(Set.empty) {
-      case (acc, (AppliedType(tyconL: TypeRef, argsL), AppliedType(tyconR: TypeRef, argsR))) if tyconL.symbol.isClass && tyconR.symbol.isClass =>
-        val clsL: ClassSymbol = tyconL.symbol.asClass
-        val clsR: ClassSymbol = tyconR.symbol.asClass
-
+    Some(pairs.foldLeft(moreConstraints) {
+      case (acc, (AsClassOrTrait(clsL, argsL), AsClassOrTrait(clsR, argsR))) =>
         // Note: subsumes the case where clsL == clsR
         if clsL.classDenot.derivesFrom(clsR) then
-          // Variance of the right-hand side class, not the left
-          val variances = clsR.typeParams.map(_.paramVariance)
-          val (leftUpcasted, boundsCstrts) = upcastTo(clsL, argsL, clsR)
-          acc ++ boundsCstrts ++ invariantIntersections(variances, leftUpcasted, argsR)
+          acc ++ relatedClassesIntersection(clsL, argsL, clsR, argsR)
         else
-          acc
-
-      case (acc, (tyconL: TypeRef, AppliedType(tyconR: TypeRef, argsR))) if tyconL.symbol.isClass && tyconR.symbol.isClass =>
-        val clsL: ClassSymbol = tyconL.symbol.asClass
-        val clsR: ClassSymbol = tyconR.symbol.asClass
-
-        // Note: subsumes the case where clsL == clsR
-        if clsL.classDenot.derivesFrom(clsR) then
-          // Variance of the right-hand side class, not the left
-          val variances = clsR.typeParams.map(_.paramVariance)
-          val (leftUpcasted, boundsCstrts) = upcastTo(clsL, Nil, clsR)
-          acc ++ boundsCstrts ++ invariantIntersections(variances, leftUpcasted, argsR)
-        else
-          acc
+          // TODO: Comments + make sure it's correct...
+          val rhsParents = clsR.classDenot.classInfo.parents
+          val rhsUpcastsInit = Set.empty[(ClassSymbol, List[Type])]
+          val boundsCstrtsInit = Set.empty[(Type, Type)]
+          val (rhsUpcasts, boundsCstrts) = rhsParents.foldLeft((rhsUpcastsInit, boundsCstrtsInit)) {
+            case ((rhsUpcastsAcc, boundsCstrtsAcc), AsClassOrTrait(rhsParent, _)) if clsL.derivesFrom(rhsParent) =>
+              val (rhsUpcasts0, boundsCstrts) = upcastTo(clsR, argsR, rhsParent)
+              val rhsUpcasts = rhsUpcasts0.collect {
+                case AsClassOrTrait(commonParent, commonParentArgs) => ((commonParent, commonParentArgs))
+              }
+              (rhsUpcastsAcc ++ rhsUpcasts, boundsCstrtsAcc ++ boundsCstrts)
+            case (acc, _) => acc
+          }
+          val intersectionCstrts =
+            rhsUpcasts.flatMap((commonParent, commonParentArgs) =>
+              relatedClassesIntersection(clsL, argsL, commonParent, commonParentArgs))
+          acc ++ boundsCstrts ++ intersectionCstrts
 
       case (acc, (AppliedType(tyconL: TypeRef, argsL), AppliedType(tyconR: TypeRef, argsR))) =>
         acc ++ constraintsFromTyconBounds(tyconL, argsL) ++ constraintsFromTyconBounds(tyconR, argsR)
@@ -881,7 +894,7 @@ final case class Knowledge private(
         acc ++ constraintsFromTyconBounds(tyconR, argsR)
 
       case (acc, _) => acc
-    }
+    })
 
 
   // TODO: For HK Type, we absolutely need to replace the binder in one of the the members to ensure that we get the most out of it
@@ -1372,9 +1385,9 @@ final case class Knowledge private(
   def applyHeadSubst(target: Type, ec: ECH, to: Type)(using Context): Type =
     target match
       //      case t: AndOrType => applyHeadSubst(toDNF(t), ec, to)
-      case ECTypeVar(otherEC) if unionFind.find(otherEC) == unionFind.find(ec) =>
+      case AsEC(otherEC) if unionFind.find(otherEC) == unionFind.find(ec) =>
         to
-      case AppliedECTypeVar(otherEC, args) if unionFind.find(otherEC) == unionFind.find(ec) =>
+      case AsAppliedEC(otherEC, args) if unionFind.find(otherEC) == unionFind.find(ec) =>
         assert(to.isInstanceOf[HKTypeLambda])
         val hk = to.asInstanceOf[HKTypeLambda]
         assert(hk.paramRefs.corresponds(args)((l, r) => l.hasSameKindAs(r)))
@@ -1435,39 +1448,12 @@ final case class Knowledge private(
 
   //////////////////////////////////////////////////////////////////////
 
-//  def TFindEC(t: Type)(using ctx: Context): Option[(ECH, TypeVar)] =
-//    try
-//      val got = doInternalize(t, Nil, true, false)
-//      val tyVar = got.asInstanceOf[TypeVar]
-//      val ec = revTypeVarReprs(tyVar)
-//      Some((ec, tyVar))
-//    catch
-//      case ECNotFound() => None
-
-//  // TODO: Name
-//  def TFindOrCreateEC(t: Type)(using ctx: Context): (ECH, TypeVar) =
-////    val tayst = findEC(t)
-//    val got = doInternalize(t, Nil, true)
-//    val tyVar = got.asInstanceOf[TypeVar]
-//    val ec = revTypeVarReprs(tyVar)
-//    (ec, tyVar)
-
-//  def findEC(t: Type)(using ctx: Context): Option[(ECH, TypeVar)] =
-//    try
-//      val internalized = doInternalize(t, Nil, true)
-//      val tyVar = got.asInstanceOf[TypeVar]
-//      val ec = revTypeVarReprs(tyVar)
-//      Some((ec, tyVar))
-//    catch
-//      case ECNotFound() => None
-
   def findOrCreateEC(t: Type)(using ctx: Context): (ECH, TypeVar) =
     val internalized = internalize(t, create = true).get
     internalized match
-      case ECTypeVar(ec0) =>
-        val ec = unionFind.find(ec0)
+      case AsEC(ec) =>
         (ec, typeVarReprs(ec))
-      case hk@HKTypeLambda(params, AppliedECTypeVar(ec0, args)) if params.corresponds(args)((param, arg) => param.paramRef == arg) =>
+      case HKTypeLambda(params, AsAppliedEC(ec0, args)) if params.corresponds(args)((param, arg) => param.paramRef == arg) =>
         val ec = unionFind.find(ec0)
         (ec, typeVarReprs(ec))
       case _ =>
@@ -1495,12 +1481,6 @@ final case class Knowledge private(
       None
     else None
 
-  // TODO: Should return a type of the following:
-  //  -[a]
-  //  -[a][args]
-  //  -Cls | Cls[args]
-  //  -[X >: ... <: ...] =>> [a][args] | [a] | Cls | Cls[args]
-  //  All of these can be transformed to plain Type accordingly
   def doInternalize(t0: Type, scope: BoundsInfo, create: Boolean)(using ctx: Context): Type =
     def helper(t: Type, scope: BoundsInfo): Type =
       t match
@@ -1538,7 +1518,7 @@ final case class Knowledge private(
       case AppliedType(tycon, args) =>
         val argsRec = args.map(a => doInternalize(a, scope, create))
         tycon match
-          case ECTypeVar(ec) =>
+          case AsEC(ec) =>
             AppliedType(typeVarReprs(ec), argsRec)
           case tr: TypeRef if tr.symbol.isClass =>
             AppliedType(tr, argsRec)
@@ -1568,7 +1548,8 @@ final case class Knowledge private(
         // TODO: Must simplify first
         disjunctionsToType(disjsRec.toSet)
 
-      case ECTypeVar(ec) => typeVarReprs(ec)
+      // TODO: What if an external tyvar gets instantiated "behind our back"???
+      case AsEC(ec) => typeVarReprs(ec)
 
       case tv: TypeVar =>
         if tv.isInstantiated then
@@ -1582,13 +1563,20 @@ final case class Knowledge private(
 
       case hk: HKTypeLambda =>
         val hkBoundsInfo = boundsInfoOf(hk)
+        val hkBoundsRec = doInternalizeBounds(hkBoundsInfo, scope, create)
         hk.resType match
           // [X] =>> ec[X]
           // TODO: What about the bounds?
-          case AppliedType(ECTypeVar(ec), args) if args == hkBoundsInfo.map(_._2) =>
-            typeVarReprs(ec)
+          // Captured by AsEC
+//          case AsAppliedEC(ec, args) if args == hkBoundsInfo.map(_._2) =>
+//            typeVarReprs(ec)
+          // [X] =>> TyCon[X]
+          case AppliedType(tycon: TypeRef, args) if args == hkBoundsInfo.map(_._2) =>
+            helper(hk.newLikeThis(hk.paramNames, hkBoundsRec.map(_._3), hk.resType), scope)
+          // [X] =>> TV[X]
+          case AppliedType(tycon: TypeVar, args) if args == hkBoundsInfo.map(_._2) && !tycon.isInstantiated =>
+            helper(hk.newLikeThis(hk.paramNames, hkBoundsRec.map(_._3), hk.resType), scope)
           case _ =>
-            val hkBoundsRec = doInternalizeBounds(hkBoundsInfo, scope, create)
             val bodyRec = doInternalize(hk.resType, scope ++ hkBoundsRec, create)
             helper(hk.newLikeThis(hk.paramNames, hkBoundsRec.map(_._3), bodyRec), scope)
         /*
@@ -1615,10 +1603,10 @@ final case class Knowledge private(
         helper(tr, scope)
 
       case other =>
-        println(i"TFindECOrCreate other match: EC For $other:")
-        println(s"   $other")
+//        println(i"TFindECOrCreate other match: EC For $other:")
+//        println(s"   $other")
         val res = helper(other, scope)
-        println(i"For that type, result is: $res")
+//        println(i"For that type, result is: $res")
         res
 
   def doInternalizeBounds(hkBounds: BoundsInfo, enclosingBounds: BoundsInfo, create: Boolean)(using Context): BoundsInfo =
@@ -1655,7 +1643,6 @@ final case class Knowledge private(
             // - For returnedType, we need to create [newEC][X]  <--- the "X" here are the X in scope, not of the HK
             (closeOver(t, scope), tyVarRepr, AppliedType(tyVarRepr, scope.map(_._2)))
 
-        // TODO: This is surely incorrect in presence of [X] =>> TypeVar[X]
         case hk: HKTypeLambda =>
           if notAppearingIn(scope.map(_._2).toSet, hk) then
             val tyVarRepr = unconstrainedTypeVar(hk)
@@ -1668,7 +1655,7 @@ final case class Knowledge private(
                 (NoType, tyVarRepr, tyVarRepr)
               // TODO: Explain why
               // TODO: Explain why
-              // TODO: Explain why
+              // TODO: Explain why: we must have a 1-to-1 correspondance between [X] =>> internalTV[X] and [X] =>> extTV[X], if the args of extTV are different, we no longer have internal == external
               case AppliedType(tv: TypeVar, args) if args == hk.paramRefs =>
                 ext2int += tv -> tyVarRepr
                 int2ext += tyVarRepr -> tv
@@ -1715,7 +1702,6 @@ final case class Knowledge private(
             case hk: HKTypeLambda =>
               TECTryMatch(hk.paramRefs.toSet, hk.resType, t) match
                 case Some(subst) =>
-//                  println(debugString)
                   val substExt = subst ++ (hk.paramRefs.toSet -- subst.keySet).map(x => x -> topOfKind(x))
                   if BECSatisfied(boundsInfoOf(hk), substExt) then
                     val substImgOrdered = orderedSubst(hk.paramRefs, substExt)
@@ -1726,8 +1712,8 @@ final case class Knowledge private(
                       TECTryFindECOfApplied(revMembers(h), substImgOrdered) match
                         case Some(ec) => return Some(typeVarReprs(ec))
                         case None => ()
-                    if !notAppearingIn(bounds.map(_._2).toSet, t) then
-                      return Some(applied)
+                    // TODO: different from original (if !notAppearing removed)
+                    return Some(applied)
                 case None => ()
             case _ => ()
         }
@@ -1738,7 +1724,7 @@ final case class Knowledge private(
     while (candidatesIt.hasNext) {
       val h = candidatesIt.next()
       storedTypes(h) match
-        case AppliedECTypeVar(candEC, candArgs)
+        case AsAppliedEC(candEC, candArgs)
           if unionFind.find(candEC) == unionFind.find(tyconEC) &&
             candArgs.corresponds(args)(TECEquiv) =>
           return Some(revMembers(h))
@@ -1775,8 +1761,8 @@ final case class Knowledge private(
         true
       case hk: HKTypeLambda =>
         isDet(hk.resType)
-      case ECTypeVar(ec) =>
-        dets.get(unionFind.find(ec)).isDefined
+      case AsEC(ec) =>
+        dets.get(ec).isDefined
       case t =>
         isDetSingleHead(t)
 
@@ -1788,8 +1774,8 @@ final case class Knowledge private(
         true
       case t: TypeRef if t.symbol.isClass =>
         true
-      case ECTypeVar(ec) =>
-        dets.get(unionFind.find(ec)).isDefined
+      case AsEC(ec) =>
+        dets.get(ec).isDefined
       case _: ConstantType => true
       case _ =>
         t.isAny || t.isAnyRef || t.isNothingType
@@ -1810,33 +1796,151 @@ final case class Knowledge private(
 //    isSameInFrozenConstraint(t, s, combinedConstraints)
 
   // TODO: Assumes dealias and all these things are already taken care of (applies to HK Bounds as well)
-  // TODO: DNF Case
-  // TODO: DNF Case
-  // TODO: DNF Case
-  // TODO: DNF Case
   def TECEquiv(s: Type, t: Type)(using ctx: Context): Boolean =
     def helper(ecA: ECH, other: Type): Boolean =
       members(unionFind.find(ecA)).exists(candTH => TECEquiv(storedTypes(candTH), other))
-    assert(s.hasSameKindAs(t))
+
+    if !s.hasSameKindAs(t) then
+      return false
+
     (s, t) match
-      case (ECTypeVar(ecS), ECTypeVar(ecT)) =>
-        unionFind.find(ecS) == unionFind.find(ecT)
-      case (AppliedECTypeVar(ecS, argsS), AppliedECTypeVar(ecT, argsT)) =>
-        unionFind.find(ecS) == unionFind.find(ecT)
-          && argsS.corresponds(argsT)(TECEquiv(_, _))
-      case (ECTypeVar(ecS), t) =>
+      case (AsEC(ecS), AsEC(ecT)) =>
+        ecS == ecT
+
+      case (AsAppliedEC(ecS, argsS), AsAppliedEC(ecT, argsT)) =>
+        ecS == ecT && argsS.corresponds(argsT)(TECEquiv(_, _))
+
+      case (AsEC(ecS), t) =>
         helper(ecS, t)
-      case (s, ECTypeVar(ecT)) =>
+
+      case (s, AsEC(ecT)) =>
         helper(ecT, s)
+
       case (AppliedType(tyconS, argsS), AppliedType(tyconT, argsT)) =>
         tyconS == tyconT && argsS.corresponds(argsT)(TECEquiv(_, _))
+
       case (hkS: HKTypeLambda, hkT: HKTypeLambda) =>
         Variances.variancesConform(hkS.typeParams, hkT.typeParams)
-          && hkS.typeParams.corresponds(hkT.typeParams)((tparamS, tparamT) =>
-            TECEquiv(tparamT.paramInfo.subst(hkT, hkS), tparamS.paramInfo))
-          && TECEquiv(hkS.resType, hkT.resType.subst(hkT, hkS))
+          && hkS.typeParams.corresponds(hkT.typeParams) { (tparamS, tparamT) =>
+            val TypeBounds(hkSLo, hkSHi) = tparamS.paramInfo.bounds
+            val TypeBounds(hkTLo, hkTHi) = tparamT.paramInfo.subst(hkT, hkS).bounds
+            TECEquiv(hkSLo, hkTLo) && TECEquiv(hkSHi, hkTHi)
+          } && TECEquiv(hkS.resType, hkT.resType.subst(hkT, hkS))
+
+      case (s: AndOrType, t: AndOrType) =>
+        // TODO: Don't be lazy and do this properly!!!!!!
+        // TODO: Don't be lazy and do this properly!!!!!!
+        // TODO: Don't be lazy and do this properly!!!!!!
+        TECIsSubtype(s, t) && TECIsSubtype(t, s)
+
       case _ => s == t
 
+  def TECIsSubtype(s: Type, t: Type)(using ctx: Context): Boolean =
+    def isSubArgs(variances: List[Variance], argsA: List[Type], argsB: List[Type]): Boolean =
+      assert(variances.hasSameLengthAs(argsA))
+      assert(argsA.hasSameLengthAs(argsB))
+      variances.zip(argsA).corresponds(argsB) {
+        case ((v, argA), argB) if varianceToInt(v) > 0 =>
+          TECIsSubtype(argA, argB)
+        case ((v, argA), argB) if varianceToInt(v) < 0 =>
+          TECIsSubtype(argB, argA)
+        case ((_, argA), argB) =>
+          TECEquiv(argA, argB)
+      }
+
+    // TODO: Verify if this is correct
+    def varianceOfEC(ec: ECH): List[Variance] =
+      typeVarReprs(ec).typeParams.map(_.paramVariance)
+
+    ///////////////////////////////////////////////////
+
+    if !s.hasSameKindAs(t) then
+      return false
+
+    if s.isNothingType || t.isAny then
+      return true
+
+    (s, t) match
+      case (s, t: AndType) =>
+        TECIsSubtype(s, t.tp1) && TECIsSubtype(s, t.tp2)
+
+      case (s: OrType, t) =>
+        TECIsSubtype(s.tp1, t) && TECIsSubtype(s.tp2, t)
+
+      case (s, t: OrType) =>
+        TECIsSubtype(s, t.tp1) || TECIsSubtype(s, t.tp2)
+
+      case (s: AndType, t) =>
+        TECIsSubtype(s.tp1, t) || TECIsSubtype(s.tp2, t)
+
+      case (AsClassOrTrait(clsS, argsS), AsClassOrTrait(clsT, argsT)) =>
+        val variances = clsS.typeParams.map(_.paramVariance)
+        if clsS == clsT then
+          isSubArgs(variances, argsS, argsT)
+        else if clsS.derivesFrom(clsT) then
+          val (upcastedS, _) = upcastTo(clsS, argsS, clsT)
+          upcastedS.exists(TECIsSubtype(_, t))
+        else
+          // TODO: This false denotes "subtyping impossibilty", which is stronger than uncertainty (that is denoted by false as well...)
+          false
+
+      case (AsEC(ecS), AsEC(ecT)) =>
+//        def byDet =
+//          dets.get(ecS).zip(dets.get(ecT))
+//            .map((detS, detT) => TECIsSubtype(storedTypes(detS), storedTypes(detT)))
+//            .getOrElse(false)
+        def byWeaklyDets =
+          cartesian(weaklyDetsOf(ecS), weaklyDetsOf(ecT))
+            .exists(TECIsSubtype(_, _))
+
+        ecS == ecT || gSub.chain(ecS, ecT).isEmpty || byWeaklyDets
+
+      case (AsAppliedEC(ecS, argsS), AsAppliedEC(ecT, argsT)) =>
+        if !Variances.variancesConform(typeVarReprs(ecS).typeParams, typeVarReprs(ecT).typeParams) then
+          return false
+        if ecS == ecT || gSub.chain(ecS, ecT).isDefined then
+          // Note: for the case where ecS != ecT but ecS <: ecT, we know that ecS and ecT have the same kind
+          // (otherwise, we would have returned earlier), so argsS and argsT have the same length.
+          isSubArgs(varianceOfEC(ecS), argsS, argsT)
+        else
+          // TODO: explain why bounds are tested all over again
+          cartesian(weaklyDetsOf(ecS), weaklyDetsOf(ecT)).exists {
+            case (membS: HKTypeLambda, membT: HKTypeLambda) =>
+              val boundsOK = membS.typeParams.corresponds(membT.typeParams) { (tparamS, tparamT) =>
+                val TypeBounds(membSLo, membSHi) = tparamS.paramInfo.bounds
+                val TypeBounds(membTLo, membTHi) = tparamT.paramInfo.subst(membT, membS).bounds
+                TECIsSubtype(membSLo, membTLo) && TECIsSubtype(membTHi, membSHi)
+              }
+              boundsOK && TECIsSubtype(membS.appliedTo(argsS), membT.appliedTo(argsT))
+            case _ => false // should be unreachable because ecS and ecT must be higher-kinded in order to be applied
+          }
+
+      case (s: HKTypeLambda, t: HKTypeLambda) =>
+        if !Variances.variancesConform(s.typeParams, t.typeParams) then
+          return false
+        val boundsOK = s.typeParams.corresponds(t.typeParams) { (tparamS, tparamT) =>
+          val TypeBounds(sLo, sHi) = tparamS.paramInfo.bounds
+          val TypeBounds(tLo, tHi) = tparamT.paramInfo.subst(t, s).bounds
+          TECIsSubtype(sLo, tLo) && TECIsSubtype(tHi, sHi)
+        }
+        boundsOK && TECIsSubtype(s.resType, t.resType.subst(t, s))
+
+      case (AppliedType(tyconS, argsS), AppliedType(tyconT, argsT)) =>
+        tyconS == tyconT && isSubArgs(tyconS.typeParams.map(_.paramVariance), argsS, argsT)
+
+      case (AsEC(ecS), t) =>
+        weaklyDetsOf(ecS).exists(TECIsSubtype(_, t))
+
+      case (s, AsEC(ecT)) =>
+        weaklyDetsOf(ecT).exists(TECIsSubtype(s, _))
+
+      case (AsAppliedEC(ecS, argsS), t) =>
+        weaklyDetsOf(ecS).exists(membS => TECIsSubtype(membS.appliedTo(argsS), t))
+
+      case (s, AsAppliedEC(ecT, argsT)) =>
+        weaklyDetsOf(ecT).exists(membT => TECIsSubtype(s, membT.appliedTo(argsT)))
+
+      case _ => s == t
 
   // TODO: Marche assui avec refn on dirait ?
   def BSubsumes(l: BoundsInfo, r: BoundsInfo)(using ctx: Context): Boolean =
@@ -1914,7 +2018,8 @@ final case class Knowledge private(
 
   def TECTryMatch(xs: Set[TypeParamRef], t: Type, s: Type)(using Context): Option[Map[TypeParamRef, Type]] =
     // assert(ftv(s).intersect(xs).isEmpty)
-    assert(notAppearingIn(xs, s))
+    // TODO: do we need this as a requirement? It seems too depending, for instance, we couldn't even match a body of an HK abstraction with itself
+//    assert(notAppearingIn(xs, s))
     // if ftv(t).intersect(xs).isEmpty then
     if notAppearingIn(xs, t) then
       if TECEquiv(t, s) then
@@ -1941,7 +2046,7 @@ final case class Knowledge private(
       //        TECTryMatchImpl(xs, t, toDNF(s))
       case (t: TypeParamRef, s) if xs.contains(t) => Map(t -> s)
 
-      case (AppliedECTypeVar(ec1, args1), AppliedECTypeVar(ec2, args2)) if unionFind.find(ec1) == unionFind.find(ec2) =>
+      case (AsAppliedEC(ec1, args1), AsAppliedEC(ec2, args2)) if ec1 == ec2 =>
         TECTryMatchVec(xs, args1, args2)
 
       // TODO: tycon comp. a bit too restrictive ?
@@ -2039,8 +2144,7 @@ final case class Knowledge private(
     override def toText(t: Type): Text =
       t match
         // TODO: May need to to someting similar for applied ec?
-        case ECTypeVar(ec0) =>
-          val ec = unionFind.find(ec0)
+        case AsEC(ec) =>
           Str(s"[$ec]")
         case tv: TypeVar => Str(tv.toString)
         case _ => super.toText(t)

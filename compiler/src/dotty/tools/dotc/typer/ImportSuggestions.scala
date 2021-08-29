@@ -105,7 +105,7 @@ trait ImportSuggestions:
     def rootsIn(ref: TermRef)(using Context): List[TermRef] =
       if seen.contains(ref) then Nil
       else
-        implicitsDetailed.println(i"search for suggestions in ${ref.symbol.fullName}")
+//        implicitsDetailed.println(i"search for suggestions in ${ref.symbol.fullName}")
         seen += ref
         ref :: rootsStrictlyIn(ref)
 

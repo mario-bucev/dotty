@@ -1218,7 +1218,11 @@ class Inliner(call: tpd.Tree, rhsToInline: tpd.Tree)(using Context) {
      *              bindings for all pattern-bound variables and the RHS of the case.
      */
     def reduceInlineMatch(scrutinee: Tree, scrutType: Type, cases: List[CaseDef], typer: Typer)(using Context): MatchRedux = {
-
+//      println("REDUCE INLINE MATCH:")
+//      println(i"   $scrutinee")
+//      println(i"   $scrutType")
+//      println(i"   "+cases.map(_.show).mkString("; "))
+//      println(i"   $typer")
       val isImplicit = scrutinee.isEmpty
 
       /** Try to match pattern `pat` against scrutinee reference `scrut`. If successful add
@@ -1313,6 +1317,7 @@ class Inliner(call: tpd.Tree, rhsToInline: tpd.Tree)(using Context) {
         def registerAsGadtSyms(typeBinds: TypeBindsMap)(using Context): Unit =
           if (typeBinds.size > 0) ctx.gadt.addToConstraint(typeBinds.keys)
 
+//        println(i"PAT: $pat")
         pat match {
           case Typed(pat1, tpt) =>
             val typeBinds = getTypeBindsMap(pat1, tpt)
@@ -1323,6 +1328,8 @@ class Inliner(call: tpd.Tree, rhsToInline: tpd.Tree)(using Context) {
             }
           case pat @ Bind(name: TermName, Typed(_, tpt)) if isImplicit =>
             val typeBinds = getTypeBindsMap(tpt, tpt)
+//            println(s"pat@Bind implicit: $typeBinds")
+//            println(i"   $tpt")
             registerAsGadtSyms(typeBinds)
             searchImplicit(pat.symbol.asTerm, tpt) && {
               addTypeBindings(typeBinds)

@@ -1037,6 +1037,13 @@ trait Implicits:
       val ref = cand.ref
       val generated: Tree = tpd.ref(ref).withSpan(span.startPos)
       val locked = ctx.typerState.ownedVars
+//      println(i"ARGS: $argument")
+//      println(i"cand: $cand")
+//      println(i"ref: $ref")
+//      println(i"generated: $generated")
+//      println(i"pt: $pt")
+//      println(i"ptWidenExpr: ${pt.widenExpr}")
+//      println(i"locked: $locked")
       val adapted =
         if (argument.isEmpty)
           adapt(generated, pt.widenExpr, locked)
@@ -1087,6 +1094,9 @@ trait Implicits:
             case _ =>
               tryConversion
         }
+//      println(i"ADAPTED: $adapted")
+//      println(adapted)
+//      println(ctx.reporter.allErrors)
       if ctx.reporter.hasErrors
          || !cand.ref.symbol.isAccessibleFrom(cand.ref.prefix)
       then

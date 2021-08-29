@@ -222,6 +222,9 @@ class TypeComparer(@constructorOnly initctx: Context) extends ConstraintHandling
    *  one sub-part of isSubType to another.
    */
   protected def recur(tp1: Type, tp2: Type): Boolean = trace(s"isSubType ${traceInfo(tp1, tp2)}${approx.show}", subtyping) {
+    val strTp1 = i"$tp1"
+    val strTp2 = i"$tp2"
+    val dummy = 3
 
     def monitoredIsSubType = {
       if (pendingSubTypes == null) {
@@ -767,10 +770,12 @@ class TypeComparer(@constructorOnly initctx: Context) extends ConstraintHandling
         tp1.info match {
           case TypeBounds(_, hi1) =>
             def compareGADT =
-              tp1.symbol.onGadtBounds(gbounds1 =>
+              tp1.symbol.onGadtBounds(gbounds1 => {
+                val aaa = gbounds1
+                val plop = 3
                 isSubTypeWhenFrozen(gbounds1.hi, tp2)
-                || narrowGADTBounds(tp1, tp2, approx, isUpper = true))
-              && (tp2.isAny || GADTusage(tp1.symbol))
+                  || narrowGADTBounds(tp1, tp2, approx, isUpper = true)
+              }) && (tp2.isAny || GADTusage(tp1.symbol))
 
             isSubType(hi1, tp2, approx.addLow) || compareGADT || tryLiftedToThis1
           case _ =>
@@ -1288,16 +1293,17 @@ class TypeComparer(@constructorOnly initctx: Context) extends ConstraintHandling
     else
       val saved = constraint
       // TODO: Sort these things
-      val savedGadt = null
-//        if !ctx.gadt.isWorking then ctx.gadt.fresh
-//        else null
+//      val savedGadt = null
+      val savedGadt =
+        if !ctx.gadt.isWorking then ctx.gadt.fresh
+        else null
 
       inline def restore() =
         state.constraint = saved
         // TODO: on veut pas restore un gadt si on est pas en frozen gadt
         //    Il faudrait employer un autre flag, parce que là c'est vraiment pas terrible...
-//        if !ctx.gadt.isWorking then
-//          ctx.gadt.restore(savedGadt)
+        if !ctx.gadt.isWorking then
+          ctx.gadt.restore(savedGadt)
 
       val savedSuccessCount = successCount
       try
@@ -1892,13 +1898,13 @@ class TypeComparer(@constructorOnly initctx: Context) extends ConstraintHandling
    */
   private def narrowGADTBounds(tr: NamedType, bound: Type, approx: ApproxState, isUpper: Boolean): Boolean = {
     val boundImprecise = approx.high || approx.low
-    ctx.mode.is(Mode.GadtConstraintInference) && !frozenGadt && !frozenConstraint && !boundImprecise && {
+    (ctx.mode.is(Mode.GadtConstraintInference) && !frozenGadt && !frozenConstraint && !boundImprecise && {
       val tparam = tr.symbol
       gadts.println(i"narrow gadt bound of $tparam: ${tparam.info} from ${if (isUpper) "above" else "below"} to $bound ${bound.toString} ${bound.isRef(tparam)}")
       if (bound.isRef(tparam)) false
       else if (isUpper) gadtAddUpperBound(tparam, bound)
       else gadtAddLowerBound(tparam, bound)
-    }
+    }) || ctx.gadt.isABound(tr, bound, isUpper)
   }
 
   // Tests around `matches`

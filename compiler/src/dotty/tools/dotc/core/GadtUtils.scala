@@ -26,6 +26,7 @@ object GadtUtils:
       case AndType(t1, t2) => fromAnds(t1) ++ fromAnds(t2)
       case t => List(t)
 
+  // TODO: remove
   def isSubtypeInFrozenConstraint(s: Type, t: Type, cstrt: Constraint)(using ctx: Context): Boolean =
     // TODO: Not sure if we are supposed to do that...
     val savedCstrt = ctx.typerState.constraint
@@ -35,6 +36,7 @@ object GadtUtils:
     finally
       ctx.typerState.constraint = savedCstrt
 
+  // TODO: remove
   def isSameInFrozenConstraint(s: Type, t: Type, cstrt: Constraint)(using ctx: Context): Boolean =
     // TODO: Not sure if we are supposed to do that...
     val savedCstrt = ctx.typerState.constraint
@@ -270,6 +272,7 @@ object GadtUtils:
     val substExt: Map[TypeParamRef, Type] = subst ++ (hkParams.toSet -- subst.keySet).map(x => x -> topOfKind(x))
     substExt.toList.sortBy((tyParam, _) => hkParams.indexOf(tyParam)).map(_._2)
 
+  // TODO: This maybe incorrect because TypeVar gets its origin accessed??
   def notAppearingIn(xs: Set[TypeParamRef], t: Type)(using Context): Boolean =
     !t.existsPart {
       case x: TypeParamRef => xs.contains(x)
@@ -277,25 +280,30 @@ object GadtUtils:
     }
 
   def noTypeParams(t: Type)(using Context): Boolean =
-    t.forallParts {
-      case x: TypeParamRef => false
-      case _ => true
+    val tacc = new TypeAccumulator[Boolean] {
+      override def apply(x: Boolean, tp: Type): Boolean =
+        if x then
+          tp match
+            case _: TypeVar => true
+            case _: TypeParamRef => false
+            case _ => foldOver(true, tp)
+        else false
     }
+    tacc(true, t)
 
-  // TODO: Say this is incorrect for structural subtyping
+  // TODO: Say this is incorrect for structural subtyping?
   def approxDisj(c1: Option[Set[(Type, Type)]], c2: Option[Set[(Type, Type)]])(using Context): Option[Set[(Type, Type)]] =
     (c1, c2) match
       case (Some(c1), Some(c2)) =>
-        val allTypesC1 = c1.flatMap((s, t) => Set(s, t))
+        val allTypesC1: Set[Type] = c1.flatMap((s, t) => Set(s, t))
         val allTypesC2 = c2.flatMap((s, t) => Set(s, t))
-        // Map[Type, Set[Type]]
-        val lowerC1 = allTypesC1.map(t => t -> c1.filter((lo, s) => s == t).map(_._1)).toMap
-        val lowerC2 = allTypesC2.map(t => t -> c2.filter((lo, s) => s == t).map(_._1)).toMap
-        val upperC1 = allTypesC1.map(t => t -> c1.filter((s, hi) => s == t).map(_._2)).toMap
-        val upperC2 = allTypesC2.map(t => t -> c2.filter((s, hi) => s == t).map(_._2)).toMap
+        // TODO: refactor this mess
+        val lowerC1: Map[Type, Set[Type]] = allTypesC1.map(t => t -> c1.filter((lo, s) => s == t).map(_._1)).filter(_._2.nonEmpty).toMap
+        val lowerC2 = allTypesC2.map(t => t -> c2.filter((lo, s) => s == t).map(_._1)).filter(_._2.nonEmpty).toMap
+        val upperC1 = allTypesC1.map(t => t -> c1.filter((s, hi) => s == t).map(_._2)).filter(_._2.nonEmpty).toMap
+        val upperC2 = allTypesC2.map(t => t -> c2.filter((s, hi) => s == t).map(_._2)).filter(_._2.nonEmpty).toMap
         Some((allTypesC1 ++ allTypesC2).foldLeft(Set.empty[(Type, Type)]) {
           case (acc, t) =>
-            // TODO: Soft = ???
             val combinedLo: Option[(Type, Type)] = lowerC1.get(t).zip(lowerC2.get(t))
               // TODO: makeHk uses liftIfHk that is in a TypeComparer...
               .flatMap((ls1, ls2) => (ls1 ++ ls2).reduceOption(AndType.makeHk(_, _)))

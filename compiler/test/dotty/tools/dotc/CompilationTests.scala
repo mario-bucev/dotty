@@ -118,7 +118,7 @@ class CompilationTests {
   }
 
   // Negative tests ------------------------------------------------------------
-
+/*
   @Test def negAll: Unit = {
     implicit val testGroup: TestGroup = TestGroup("compileNeg")
     aggregateTests(
@@ -183,7 +183,7 @@ class CompilationTests {
     implicit val testGroup: TestGroup = TestGroup("compileFuzzy")
     compileFilesInDir("tests/fuzzy", defaultOptions).checkNoCrash()
   }
-
+*/
   // Run tests -----------------------------------------------------------------
 
   @Test def runAll: Unit = {
@@ -199,7 +199,7 @@ class CompilationTests {
       compileFilesInDir("tests/run", defaultOptions.and("-Ysafe-init"))
     ).checkRuns()
   }
-
+/*
   // Generic java signatures tests ---------------------------------------------
 
   @Test def genericJavaSignatures: Unit = {
@@ -349,6 +349,7 @@ class CompilationTests {
       tests.foreach(_.delete())
     }
   }
+*/
 }
 
 object CompilationTests extends ParallelTesting {

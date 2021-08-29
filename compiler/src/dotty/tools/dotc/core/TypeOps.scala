@@ -615,8 +615,8 @@ object TypeOps:
             val bound1 = massage(bound)
             if (bound1 ne bound) {
               if (checkCtx eq ctx) checkCtx = ctx.fresh.setFreshGADTBounds
-              if (!checkCtx.gadt.contains(sym)) checkCtx.gadt.addToConstraint(sym)
-              checkCtx.gadt.addBound(sym, bound1, fromBelow)
+              if (!checkCtx.gadt.contains(sym)(using checkCtx)) checkCtx.gadt.addToConstraint(sym)(using checkCtx)
+              checkCtx.gadt.addBound(sym, bound1, fromBelow)(using checkCtx)
               typr.println("install GADT bound $bound1 for when checking F-bounded $sym")
             }
           }

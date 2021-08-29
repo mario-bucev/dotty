@@ -63,6 +63,8 @@ sealed abstract class GadtConstraint extends Showable {
   def isWorking: Boolean = false
 
   def isABound(tr: NamedType, bound: Type, upper: Boolean)(using Context) = false
+
+  def instantiatedTVar(tvar: TypeVar, inst: Type)(using Context): Unit = ()
 }
 
 final class ProperGadtConstraint private(
@@ -107,6 +109,9 @@ final class ProperGadtConstraint private(
 //    false
     ???
   }
+
+  override def instantiatedTVar(tvar: TypeVar, inst: Type)(using Context): Unit =
+    knowledge.instantiatedTVar(tvar, inst)
 
   override def isABound(tr: NamedType, bound: Type, upper: Boolean)(using Context) = performWork {
     checkCtx

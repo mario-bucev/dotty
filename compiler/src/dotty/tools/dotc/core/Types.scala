@@ -4479,6 +4479,7 @@ object Types {
 
     /** Instantiate variable with given type */
     def instantiateWith(tp: Type)(using Context): Type = {
+      val tpStr = i"$tp"
       assert(tp ne this, i"self instantiation of $origin, constraint = ${ctx.typerState.constraint}")
       assert(!myInst.exists, i"$origin is already instantiated to $myInst but we attempted to instantiate it to $tp")
       typr.println(i"instantiating $this with $tp")
@@ -4490,6 +4491,7 @@ object Types {
       if (owningState != null && (ctx.typerState eq owningState.get) && !TypeComparer.subtypeCheckInProgress)
         setInst(tp)
       ctx.typerState.constraint = ctx.typerState.constraint.replace(origin, tp)
+      ctx.gadt.instantiatedTVar(this, tp)
       tp
     }
 

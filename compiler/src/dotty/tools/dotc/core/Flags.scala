@@ -4,8 +4,6 @@ package core
 object Flags {
 
 
-
-
   object opaques {
 
     /** A FlagSet represents a set of flags. Flags are encoded as follows:

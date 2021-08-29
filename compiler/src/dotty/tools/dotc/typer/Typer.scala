@@ -2146,7 +2146,7 @@ class Typer extends Namer
       ctx.outer.outersIterator.takeWhile(!_.owner.is(Method))
         .filter(ctx => ctx.owner.isClass && ctx.owner.typeParams.nonEmpty)
         .toList.reverse
-        .foreach(ctx => rhsCtx.gadt.addToConstraint(ctx.owner.typeParams))
+        .foreach(ctx => rhsCtx.gadt.addToConstraint(ctx.owner.typeParams)(using rhsCtx))
 
     if tparamss.nonEmpty then
       rhsCtx.setFreshGADTBounds
@@ -2155,16 +2155,16 @@ class Typer extends Namer
         // we're typing a polymorphic definition's body,
         // so we allow constraining all of its type parameters
         // constructors are an exception as we don't allow constraining type params of classes
-        rhsCtx.gadt.addToConstraint(tparamSyms)
+        rhsCtx.gadt.addToConstraint(tparamSyms)(using rhsCtx)
       else if !sym.isPrimaryConstructor then
         // otherwise, for secondary constructors we need a context that "knows"
         // that their type parameters are aliases of the class type parameters.
         // See pos/i941.scala
-        rhsCtx.gadt.addToConstraint(tparamSyms)
+        rhsCtx.gadt.addToConstraint(tparamSyms)(using rhsCtx)
         tparamSyms.lazyZip(sym.owner.typeParams).foreach { (psym, tparam) =>
           val tr = tparam.typeRef
-          rhsCtx.gadt.addBound(psym, tr, isUpper = false)
-          rhsCtx.gadt.addBound(psym, tr, isUpper = true)
+          rhsCtx.gadt.addBound(psym, tr, isUpper = false)(using rhsCtx)
+          rhsCtx.gadt.addBound(psym, tr, isUpper = true)(using rhsCtx)
         }
 
     if sym.isInlineMethod then rhsCtx.addMode(Mode.InlineableBody)
